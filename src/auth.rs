@@ -1,9 +1,8 @@
 use anyhow::Result;
 use keyring::Entry;
-use std::collections::HashMap;
+use std::io::Read;
 use std::net::TcpListener;
-use tiny_http::{Server, Response};
-use url::Url;
+use tiny_http::{Server, Response, Method, Header};
 use crate::config;
 
 const SERVICE_NAME: &str = "wvdsh";
@@ -55,7 +54,7 @@ pub fn login_with_browser() -> Result<String> {
     
     let website_host = config::get("open_browser_website_host")?;
     let auth_url = format!(
-        "{}/developers/cli/auth?redirect_uri={}&state={}",
+        "{}/developers/cli/auth?callback_uri={}&state={}",
         website_host,
         urlencoding::encode(&redirect_uri),
         urlencoding::encode(&state)
@@ -68,25 +67,48 @@ pub fn login_with_browser() -> Result<String> {
         .map_err(|e| anyhow::anyhow!("Failed to start server: {}", e))?;
     println!("Waiting for authorization...");
 
-    for request in server.incoming_requests() {
-        let url_str = format!("http://localhost{}", request.url());
-        let parsed_url = Url::parse(&url_str)?;
+    for mut request in server.incoming_requests() {
+        let cors_header = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..])
+            .unwrap();
         
-        let params: HashMap<String, String> = parsed_url
-            .query_pairs()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-
-        let _ = request.respond(Response::from_string("Success! You can close this window."));
-
-        if let (Some(received_state), Some(api_key)) = (params.get("state"), params.get("api_key")) {
-            if received_state == &state {
-                return Ok(api_key.clone());
+        match request.method() {
+            &Method::Options => {
+                // Handle CORS preflight
+                let response = Response::from_string("")
+                    .with_header(cors_header.clone())
+                    .with_header(Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"POST, OPTIONS"[..]).unwrap())
+                    .with_header(Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type"[..]).unwrap());
+                let _ = request.respond(response);
             }
-        }
-        
-        if params.get("error").is_some() {
-            anyhow::bail!("Authentication failed");
+            &Method::Post => {
+                let mut body = String::new();
+                request.as_reader().read_to_string(&mut body)?;
+                
+                let data: serde_json::Value = serde_json::from_str(&body)?;
+                
+                let response = Response::from_string("OK").with_header(cors_header);
+                let _ = request.respond(response);
+                
+                if let (Some(received_state), Some(api_key)) = (
+                    data["state"].as_str(),
+                    data["api_key"].as_str()
+                ) {
+                    if received_state == state {
+                        return Ok(api_key.to_string());
+                    } else {
+                        anyhow::bail!("State mismatch");
+                    }
+                }
+                
+                if data["error"].is_string() {
+                    anyhow::bail!("Authentication failed: {}", data["error"].as_str().unwrap_or("Unknown error"));
+                }
+            }
+            _ => {
+                // Handle GET requests
+                let response = Response::from_string("Waiting for authorization...").with_header(cors_header);
+                let _ = request.respond(response);
+            }
         }
     }
 
