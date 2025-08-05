@@ -8,6 +8,8 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Needed to push git tags
     steps:
       - uses: actions/checkout@v4
           
