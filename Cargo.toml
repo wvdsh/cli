@@ -1,11 +1,19 @@
 [package]
-name = "wavedash-cli"
+name = "wavedash"
 version = "0.1.0"
 edition = "2021"
 authors = ["Wavedash Team"]
 description = "Cross-platform CLI tool for uploading game projects to wavedash.gg"
 license = "MIT"
 repository = "https://github.com/wavedash/cli"
+homepage = "https://wavedash.gg"
+readme = "README.md"
+keywords = ["cli", "gaming", "upload", "wavedash"]
+categories = ["command-line-utilities", "games"]
+
+[[bin]]
+name = "wvdsh"
+path = "src/main.rs"
 
 [dependencies]
 # CLI Framework

@@ -2,6 +2,12 @@
 
 Cross-platform CLI tool for uploading game projects to wavedash.gg.
 
+## Installation
+
+```bash
+cargo install wavedash
+```
+
 ## Development
 
 **Local development (default):**

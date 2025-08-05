@@ -1,0 +1,47 @@
+name: Publish to Crates.io
+
+on:
+  push:
+    branches: [main]
+    paths: ['Cargo.toml'] # Only trigger when Cargo.toml changes
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+          
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          
+      - name: Get version from Cargo.toml
+        run: |
+          VERSION=$(cargo pkgid | cut -d# -f2 | cut -d: -f2)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Current version: $VERSION"
+          
+      - name: Check if version exists on crates.io
+        id: version_check
+        run: |
+          if curl -s "https://crates.io/api/v1/crates/wavedash" | jq -r '.versions[].num' | grep -q "^$VERSION$"; then
+            echo "Version $VERSION already exists on crates.io - skipping publish"
+            echo "should_publish=false" >> $GITHUB_OUTPUT
+          else
+            echo "Version $VERSION is new - will publish"
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Publish to crates.io
+        if: steps.version_check.outputs.should_publish == 'true'
+        run: |
+          cargo login ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          cargo publish
+          
+      - name: Create Git tag
+        if: steps.version_check.outputs.should_publish == 'true'
+        run: |
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
