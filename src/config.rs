@@ -4,6 +4,7 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 struct Config {
     open_browser_website_host: String,
+    api_host: String,
 }
 
 impl Config {
@@ -19,6 +20,7 @@ pub fn get(key: &str) -> Result<String> {
     let config = Config::load()?;
     match key {
         "open_browser_website_host" => Ok(config.open_browser_website_host),
+        "api_host" => Ok(config.api_host),
         _ => anyhow::bail!("Unknown config key: {}", key),
     }
 }

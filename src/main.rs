@@ -1,9 +1,12 @@
 mod auth;
+mod builds;
 mod config;
+mod rclone;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use auth::{AuthManager, login_with_browser};
+use builds::handle_build_push;
 
 #[derive(Parser)]
 #[command(name = "wvdsh")]
@@ -19,6 +22,10 @@ enum Commands {
         #[command(subcommand)]
         action: AuthCommands,
     },
+    Build {
+        #[command(subcommand)]
+        action: BuildCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -29,6 +36,20 @@ enum AuthCommands {
     },
     Logout,
     Status,
+}
+
+#[derive(Subcommand)]
+enum BuildCommands {
+    Push {
+        #[arg(help = "Target in format: org_slug/game_slug:branch_name")]
+        target: String,
+        #[arg(short = 'e', long, help = "Game engine (e.g., godot, unity, unreal)")]
+        engine: String,
+        #[arg(short = 'v', long = "engine-version", help = "Engine version (e.g., 4.5-beta)")]
+        engine_version: String,
+        #[arg(help = "Source directory to upload", default_value = ".")]
+        source: std::path::PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -77,6 +98,13 @@ async fn main() -> Result<()> {
                     } else {
                         println!("Not authenticated. Run 'wvdsh auth login' to get started.");
                     }
+                }
+            }
+        }
+        Commands::Build { action } => {
+            match action {
+                BuildCommands::Push { target, engine, engine_version, source } => {
+                    handle_build_push(target, engine, engine_version, source).await?;
                 }
             }
         }

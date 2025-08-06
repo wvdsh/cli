@@ -1,1 +1,2 @@
 open_browser_website_host = "http://localhost:5173"
+api_host = "https://precise-lyrebird-592.convex.site"
