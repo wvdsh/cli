@@ -5,6 +5,17 @@ use crate::auth::AuthManager;
 use crate::config;
 use crate::rclone::{RcloneManager, R2Config};
 
+#[derive(Debug, Deserialize)]
+struct ApiErrorResponse {
+    error: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiError {
+    code: String,
+    message: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct R2Credentials {
     #[serde(rename = "accessKeyId")]
@@ -57,7 +68,7 @@ async fn get_temp_credentials(
     let api_host = config::get("api_host")?;
     
     let url = format!(
-        "{}/organizations/{}/games/{}/builds/{}/create-temp-r2-creds",
+        "{}/api/organizations/{}/games/{}/builds/{}/create-temp-r2-creds",
         api_host, org_slug, game_slug, branch_name
     );
 
@@ -76,6 +87,16 @@ async fn get_temp_credentials(
 
     if !response.status().is_success() {
         let error_text = response.text().await?;
+        
+        // Try to parse the API error response
+        if let Ok(api_error_response) = serde_json::from_str::<ApiErrorResponse>(&error_text) {
+            // Try to parse the nested error JSON
+            if let Ok(api_error) = serde_json::from_str::<ApiError>(&api_error_response.error) {
+                anyhow::bail!("{}", api_error.message);
+            }
+        }
+        
+        // Fallback to raw error text if parsing fails
         anyhow::bail!("API request failed: {}", error_text);
     }
 
@@ -105,9 +126,6 @@ pub async fn handle_build_push(
         anyhow::bail!("Source must be a directory: {}", source.display());
     }
 
-    println!("Uploading build for {}...", target);
-    println!("Engine: {} v{}", engine, engine_version);
-    println!("Source: {}", source.display());
 
     // Get temporary R2 credentials
     let creds = get_temp_credentials(&org_slug, &game_slug, &branch_name, &engine, &engine_version, &api_key).await?;

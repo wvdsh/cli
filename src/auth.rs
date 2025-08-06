@@ -1,6 +1,5 @@
 use anyhow::Result;
 use keyring::Entry;
-use std::io::Read;
 use std::net::TcpListener;
 use tiny_http::{Server, Response, Method, Header};
 use crate::config;

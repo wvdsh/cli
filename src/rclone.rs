@@ -3,7 +3,7 @@ use directories::ProjectDirs;
 use std::path::PathBuf;
 use std::process::Command;
 use tempfile::NamedTempFile;
-use std::io::{Write, Cursor};
+use std::io::Write;
 use zip::ZipArchive;
 
 const RCLONE_VERSION: &str = "1.67.0";
