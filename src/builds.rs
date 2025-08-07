@@ -12,6 +12,7 @@ struct ApiErrorResponse {
 
 #[derive(Debug, Deserialize)]
 struct ApiError {
+    #[allow(dead_code)]
     code: String,
     message: String,
 }
@@ -104,11 +105,52 @@ async fn get_temp_credentials(
     Ok(creds)
 }
 
+async fn notify_upload_complete(
+    org_slug: &str,
+    game_slug: &str,
+    branch_name: &str,
+    build_id: &str,
+    api_key: &str,
+) -> Result<()> {
+    let client = reqwest::Client::new();
+    let api_host = config::get("api_host")?;
+    
+    let url = format!(
+        "{}/api/organizations/{}/games/{}/builds/{}/builds/{}/upload-completed",
+        api_host, org_slug, game_slug, branch_name, build_id
+    );
+
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let error_text = response.text().await?;
+        
+        // Try to parse the API error response
+        if let Ok(api_error_response) = serde_json::from_str::<ApiErrorResponse>(&error_text) {
+            // Try to parse the nested error JSON
+            if let Ok(api_error) = serde_json::from_str::<ApiError>(&api_error_response.error) {
+                anyhow::bail!("{}", api_error.message);
+            }
+        }
+        
+        // Fallback to raw error text if parsing fails
+        anyhow::bail!("API request failed: {}", error_text);
+    }
+
+    Ok(())
+}
+
 pub async fn handle_build_push(
     target: String,
     engine: String,
     engine_version: String,
     source: PathBuf,
+    verbose: bool,
 ) -> Result<()> {
     // Check authentication
     let auth_manager = AuthManager::new()?;
@@ -139,17 +181,17 @@ pub async fn handle_build_push(
     };
 
     // Initialize rclone and upload
-    let mut rclone = RcloneManager::new()?;
+    let mut rclone = RcloneManager::new(verbose)?;
     rclone.sync_to_r2(
         source.to_str().unwrap(),
         &creds.bucket_name,
         &creds.r2_key_prefix,
         &r2_config,
+        verbose,
     ).await?;
 
-    println!("✓ Build uploaded successfully!");
-    println!("Build ID: {}", creds.game_build_id);
-    println!("UUID: {}", creds.uuid);
+    // Notify the server that upload is complete
+    notify_upload_complete(&org_slug, &game_slug, &branch_name, &creds.game_build_id, &api_key).await?;
 
     Ok(())
 }

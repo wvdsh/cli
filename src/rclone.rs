@@ -1,10 +1,12 @@
 use anyhow::{Result, Context};
 use directories::ProjectDirs;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
 use std::process::Command;
+use std::io::{Read, Write};
 use tempfile::NamedTempFile;
-use std::io::Write;
 use zip::ZipArchive;
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 const RCLONE_VERSION: &str = "1.67.0";
 
@@ -17,16 +19,36 @@ pub struct R2Config {
 
 pub struct RcloneManager {
     rclone_path: Option<PathBuf>,
+    verbose: bool,
 }
 
 impl RcloneManager {
-    pub fn new() -> Result<Self> {
+    pub fn new(verbose: bool) -> Result<Self> {
         // First, check if rclone is available in PATH
         if Command::new("rclone").arg("version").output().is_ok() {
-            println!("✓ Using system rclone");
+            if verbose {
+                println!("Using system rclone from PATH");
+            }
             return Ok(Self {
                 rclone_path: Some(PathBuf::from("rclone")),
+                verbose,
             });
+        }
+
+        // Check if we have a cached rclone binary
+        if let Some(project_dirs) = ProjectDirs::from("gg", "wavedash", "wvdsh") {
+            let (_, _, executable_name) = Self::get_download_info();
+            let cached_binary = project_dirs.cache_dir().join("bin").join(executable_name);
+            
+            if cached_binary.exists() {
+                if verbose {
+                    println!("Using cached rclone from {}", cached_binary.display());
+                }
+                return Ok(Self {
+                    rclone_path: Some(cached_binary),
+                    verbose,
+                });
+            }
         }
 
         // Fallback to downloading rclone
@@ -34,6 +56,7 @@ impl RcloneManager {
         
         Ok(Self {
             rclone_path: None,
+            verbose,
         })
     }
 
@@ -87,6 +110,10 @@ impl RcloneManager {
         // Extract binary based on archive type
         let binary_path = self.extract_binary(temp_archive.path(), executable_name, archive_type)?;
         
+        if self.verbose {
+            println!("Downloaded and extracted rclone to {}", binary_path.display());
+        }
+        
         self.rclone_path = Some(binary_path);
         Ok(self.rclone_path.as_ref().unwrap())
     }
@@ -127,16 +154,6 @@ impl RcloneManager {
         }
     }
 
-    pub async fn run_rclone(&mut self, args: &[&str]) -> Result<std::process::Output> {
-        let rclone_path = self.ensure_rclone().await?;
-        
-        let output = Command::new(rclone_path)
-            .args(args)
-            .output()
-            .context("Failed to execute rclone command")?;
-
-        Ok(output)
-    }
 
     fn create_rclone_config(&self, config: &R2Config) -> Result<NamedTempFile> {
         let mut config_file = NamedTempFile::new()
@@ -164,35 +181,163 @@ acl = private
         Ok(config_file)
     }
 
+    fn parse_rclone_progress(line: &str, verbose: bool) -> Option<u64> {
+        // Strip ANSI escape codes first
+        let clean_line = strip_ansi_escapes::strip_str(line);
+        
+        if verbose {
+            println!("rclone output: '{}'", clean_line);
+        }
+        
+        // Parse lines like "Transferred: 486.181G / 926.373 GBytes, 52%, 13.589 MBytes/s, ETA 9h12m49s"
+        if clean_line.contains("Transferred:") && clean_line.contains("%") {
+            // Find the percentage - it's between two commas or comma and space
+            if let Some(percent_pos) = clean_line.find('%') {
+                // Look backward from % to find the start of the percentage number
+                let before_percent = &clean_line[..percent_pos];
+                
+                // Find the last comma or space before the percentage
+                let start_pos = before_percent.rfind(',')
+                    .or_else(|| before_percent.rfind(' '))
+                    .map(|pos| pos + 1)
+                    .unwrap_or(0);
+                
+                let percent_str = before_percent[start_pos..].trim();
+                if let Ok(percent) = percent_str.parse::<f64>() {
+                    if verbose {
+                        println!("Parsed progress: {}%", percent);
+                    }
+                    return Some(percent as u64);
+                }
+            }
+        }
+        None
+    }
+
     pub async fn sync_to_r2(
         &mut self,
         source: &str,
         bucket: &str,
         prefix: &str,
         config: &R2Config,
+        verbose: bool,
     ) -> Result<()> {
         let config_file = self.create_rclone_config(config)?;
         let destination = format!("r2:{}/{}", bucket, prefix);
+        let rclone_path = self.ensure_rclone().await?;
         
+        // Convert source to absolute path to avoid PTY working directory issues
+        let source_path = std::path::Path::new(source);
+        let absolute_source = if source_path.is_absolute() {
+            source.to_string()
+        } else {
+            std::env::current_dir()?.join(source_path).to_string_lossy().to_string()
+        };
+
         let args = vec![
             "sync",
-            source,
+            &absolute_source,
             &destination,
             "--config", config_file.path().to_str().unwrap(),
             "--progress",
-            "--stats", "10s",
+            "--stats", "250ms",
             "--checksum",
         ];
 
-        println!("Uploading build to R2...");
-        let output = self.run_rclone(&args).await?;
+        // Create a progress bar for the upload
+        let pb = ProgressBar::new(100);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("[{bar:40.cyan/blue}] {pos:>3}% {msg}")
+                .unwrap(),
+        );
+        pb.set_message("Uploading build to R2...");
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("rclone sync failed: {}", stderr);
+        if verbose {
+            println!("Running rclone with args: {:?}", args);
         }
 
-        println!("✓ Successfully uploaded to R2: {}", destination);
+        // Use PTY to get real-time output
+        let pty_system = native_pty_system();
+        let pty_pair = pty_system.openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
+
+        let mut cmd = CommandBuilder::new(rclone_path);
+        for arg in &args {
+            cmd.arg(arg);
+        }
+
+        let mut child = pty_pair.slave.spawn_command(cmd)?;
+        
+        // Read from PTY master asynchronously
+        let mut reader = pty_pair.master.try_clone_reader()?;
+        
+        let pb_clone = pb.clone();
+        let read_task = tokio::task::spawn_blocking(move || {
+            let mut buffer = [0u8; 1024];
+            let mut line_buffer = String::new();
+            
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => break, // EOF
+                    Ok(n) => {
+                        let chunk = String::from_utf8_lossy(&buffer[..n]);
+                        line_buffer.push_str(&chunk);
+                        
+                        // Process complete lines
+                        while let Some(newline_pos) = line_buffer.find('\n') {
+                            let line = line_buffer[..newline_pos].to_string();
+                            line_buffer = line_buffer[newline_pos + 1..].to_string();
+                            
+                            if verbose {
+                                println!("pty line: '{}'", line);
+                            }
+                            
+                            if let Some(percent) = Self::parse_rclone_progress(&line, verbose) {
+                                pb_clone.set_position(percent.min(100));
+                            }
+                        }
+                        
+                        // Also check for carriage return (for real-time updates)
+                        while let Some(cr_pos) = line_buffer.find('\r') {
+                            let line = line_buffer[..cr_pos].to_string();
+                            line_buffer = line_buffer[cr_pos + 1..].to_string();
+                            
+                            if verbose {
+                                println!("pty line (CR): '{}'", line);
+                            }
+                            
+                            if let Some(percent) = Self::parse_rclone_progress(&line, verbose) {
+                                pb_clone.set_position(percent.min(100));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if verbose {
+                            println!("PTY read error: {}", e);
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Wait for the process to finish
+        let status = child.wait()?;
+        
+        // Wait for reading task to complete
+        let _ = read_task.await;
+
+        if !status.success() {
+            pb.finish_with_message("❌ Upload failed");
+            anyhow::bail!("rclone sync failed with exit code: {:?}", status);
+        }
+
+        pb.finish_with_message("✓ Build uploaded successfully!");
         Ok(())
     }
 }

@@ -12,6 +12,8 @@ use builds::handle_build_push;
 #[command(name = "wvdsh")]
 #[command(about = "Cross-platform CLI tool for uploading game projects to wavedash.gg")]
 struct Cli {
+    #[arg(long, global = true, help = "Enable verbose output")]
+    verbose: bool,
     #[command(subcommand)]
     command: Commands,
 }
@@ -104,7 +106,7 @@ async fn main() -> Result<()> {
         Commands::Build { action } => {
             match action {
                 BuildCommands::Push { target, engine, engine_version, source } => {
-                    handle_build_push(target, engine, engine_version, source).await?;
+                    handle_build_push(target, engine, engine_version, source, cli.verbose).await?;
                 }
             }
         }

@@ -60,6 +60,8 @@ tiny_http = "0.12"
 open = "5.0"
 url = "2.5"
 urlencoding = "2.1"
+strip-ansi-escapes = "0.2"
+portable-pty = "0.8"
 
 
 
