@@ -181,38 +181,9 @@ acl = private
         Ok(config_file)
     }
 
-    fn parse_rclone_progress(line: &str, verbose: bool) -> Option<u64> {
-        // Strip ANSI escape codes first
-        let clean_line = strip_ansi_escapes::strip_str(line);
-        
-        if verbose {
-            println!("rclone output: '{}'", clean_line);
-        }
-        
-        // Parse lines like "Transferred: 486.181G / 926.373 GBytes, 52%, 13.589 MBytes/s, ETA 9h12m49s"
-        if clean_line.contains("Transferred:") && clean_line.contains("%") {
-            // Find the percentage - it's between two commas or comma and space
-            if let Some(percent_pos) = clean_line.find('%') {
-                // Look backward from % to find the start of the percentage number
-                let before_percent = &clean_line[..percent_pos];
-                
-                // Find the last comma or space before the percentage
-                let start_pos = before_percent.rfind(',')
-                    .or_else(|| before_percent.rfind(' '))
-                    .map(|pos| pos + 1)
-                    .unwrap_or(0);
-                
-                let percent_str = before_percent[start_pos..].trim();
-                if let Ok(percent) = percent_str.parse::<f64>() {
-                    if verbose {
-                        println!("Parsed progress: {}%", percent);
-                    }
-                    return Some(percent as u64);
-                }
-            }
-        }
-        None
-    }
+    // =============================================================================
+    // CORE SYNC FUNCTIONALITY
+    // =============================================================================
 
     pub async fn sync_to_r2(
         &mut self,
@@ -245,13 +216,7 @@ acl = private
         ];
 
         // Create a progress bar for the upload
-        let pb = ProgressBar::new(100);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("[{bar:40.cyan/blue}] {pos:>3}% {msg}")
-                .unwrap(),
-        );
-        pb.set_message("Uploading build to R2...");
+        let pb = Self::create_progress_bar();
 
         if verbose {
             println!("Running rclone with args: {:?}", args);
@@ -339,5 +304,53 @@ acl = private
 
         pb.finish_with_message("✓ Build uploaded successfully!");
         Ok(())
+    }
+
+    // =============================================================================
+    // PROGRESS DISPLAY HELPERS
+    // =============================================================================
+
+    fn parse_rclone_progress(line: &str, verbose: bool) -> Option<u64> {
+        // Strip ANSI escape codes first
+        let clean_line = strip_ansi_escapes::strip_str(line);
+        
+        if verbose {
+            println!("rclone output: '{}'", clean_line);
+        }
+        
+        // Parse lines like "Transferred: 486.181G / 926.373 GBytes, 52%, 13.589 MBytes/s, ETA 9h12m49s"
+        if clean_line.contains("Transferred:") && clean_line.contains("%") {
+            // Find the percentage - it's between two commas or comma and space
+            if let Some(percent_pos) = clean_line.find('%') {
+                // Look backward from % to find the start of the percentage number
+                let before_percent = &clean_line[..percent_pos];
+                
+                // Find the last comma or space before the percentage
+                let start_pos = before_percent.rfind(',')
+                    .or_else(|| before_percent.rfind(' '))
+                    .map(|pos| pos + 1)
+                    .unwrap_or(0);
+                
+                let percent_str = before_percent[start_pos..].trim();
+                if let Ok(percent) = percent_str.parse::<f64>() {
+                    if verbose {
+                        println!("Parsed progress: {}%", percent);
+                    }
+                    return Some(percent as u64);
+                }
+            }
+        }
+        None
+    }
+
+    fn create_progress_bar() -> ProgressBar {
+        let pb = ProgressBar::new(100);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("[{bar:40.cyan/blue}] {pos:>3}% {msg}")
+                .unwrap(),
+        );
+        pb.set_message("Uploading build to R2...");
+        pb
     }
 }
