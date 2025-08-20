@@ -47,7 +47,7 @@ enum BuildCommands {
         target: String,
         #[arg(short = 'e', long, help = "Game engine (e.g., godot, unity, unreal)")]
         engine: String,
-        #[arg(short = 'v', long = "engine-version", help = "Engine version (e.g., 4.5-beta)")]
+        #[arg(short = 'v', long = "version", help = "Engine version (e.g., 4.5-beta)")]
         engine_version: String,
         #[arg(help = "Source directory to upload", default_value = ".")]
         source: std::path::PathBuf,
