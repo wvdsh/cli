@@ -9,10 +9,16 @@ struct Config {
 
 impl Config {
     fn load() -> Result<Self> {
-        let env = std::env::var("ENV").unwrap_or_else(|_| "dev".to_string());
-        let config_path = format!("config/{}.toml", env);
-        let config_content = std::fs::read_to_string(config_path)?;
-        Ok(toml::from_str(&config_content)?)
+        // Try to load local config first (for development)
+        if let Ok(config_content) = std::fs::read_to_string("config.toml") {
+            return Ok(toml::from_str(&config_content)?);
+        }
+        
+        // Default to production for published releases
+        Ok(Self {
+            open_browser_website_host: "https://wavedash.gg".to_string(),
+            api_host: "https://convex-http.wavedash.gg".to_string(),
+        })
     }
 }
 

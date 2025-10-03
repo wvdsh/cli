@@ -1,0 +1,11 @@
+# Wavedash CLI Configuration
+# Copy this file to config.toml and customize for local development
+
+# Production (default)
+open_browser_website_host = "https://wavedash.gg"
+api_host = "https://convex-http.wavedash.gg"
+
+# For local development, change to:
+# open_browser_website_host = "http://localhost:5173"
+# api_host = "your-convex-deployment"
+
