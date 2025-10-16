@@ -69,9 +69,11 @@ async fn get_temp_credentials(
     let api_host = config::get("api_host")?;
     
     let url = format!(
-        "{}/api/organizations/{}/games/{}/builds/{}/create-temp-r2-creds",
+        "{}/api/organizations/{}/games/{}/branches/{}/builds/create-temp-r2-creds",
         api_host, org_slug, game_slug, branch_slug
     );
+
+    println!("URL: {}", url);
 
     let request_body = serde_json::json!({
         "engine": engine,
@@ -116,7 +118,7 @@ async fn notify_upload_complete(
     let api_host = config::get("api_host")?;
     
     let url = format!(
-        "{}/api/organizations/{}/games/{}/builds/{}/builds/{}/upload-completed",
+        "{}/api/organizations/{}/games/{}/branches/{}/builds/{}/upload-completed",
         api_host, org_slug, game_slug, branch_slug, build_id
     );
 
