@@ -73,8 +73,6 @@ async fn get_temp_credentials(
         api_host, org_slug, game_slug, branch_slug
     );
 
-    println!("URL: {}", url);
-
     let request_body = serde_json::json!({
         "engine": engine,
         "engineVersion": engine_version
