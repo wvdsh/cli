@@ -45,22 +45,22 @@ struct TempCredsResponse {
 fn parse_target(target: &str) -> Result<(String, String, String)> {
     let parts: Vec<&str> = target.split(':').collect();
     if parts.len() != 2 {
-        anyhow::bail!("Invalid target format. Expected: org_slug/game_slug:branch_name");
+        anyhow::bail!("Invalid target format. Expected: org_slug/game_slug:branch_slug");
     }
 
-    let branch_name = parts[1].to_string();
+    let branch_slug = parts[1].to_string();
     let org_game: Vec<&str> = parts[0].split('/').collect();
     if org_game.len() != 2 {
-        anyhow::bail!("Invalid target format. Expected: org_slug/game_slug:branch_name");
+        anyhow::bail!("Invalid target format. Expected: org_slug/game_slug:branch_slug");
     }
 
-    Ok((org_game[0].to_string(), org_game[1].to_string(), branch_name))
+    Ok((org_game[0].to_string(), org_game[1].to_string(), branch_slug))
 }
 
 async fn get_temp_credentials(
     org_slug: &str,
     game_slug: &str,
-    branch_name: &str,
+    branch_slug: &str,
     engine: &str,
     engine_version: &str,
     api_key: &str,
@@ -70,7 +70,7 @@ async fn get_temp_credentials(
     
     let url = format!(
         "{}/api/organizations/{}/games/{}/builds/{}/create-temp-r2-creds",
-        api_host, org_slug, game_slug, branch_name
+        api_host, org_slug, game_slug, branch_slug
     );
 
     let request_body = serde_json::json!({
@@ -108,7 +108,7 @@ async fn get_temp_credentials(
 async fn notify_upload_complete(
     org_slug: &str,
     game_slug: &str,
-    branch_name: &str,
+    branch_slug: &str,
     build_id: &str,
     api_key: &str,
 ) -> Result<()> {
@@ -117,7 +117,7 @@ async fn notify_upload_complete(
     
     let url = format!(
         "{}/api/organizations/{}/games/{}/builds/{}/builds/{}/upload-completed",
-        api_host, org_slug, game_slug, branch_name, build_id
+        api_host, org_slug, game_slug, branch_slug, build_id
     );
 
     let response = client
@@ -158,7 +158,7 @@ pub async fn handle_build_push(
         .ok_or_else(|| anyhow::anyhow!("Not authenticated. Run 'wvdsh auth login' first."))?;
 
     // Parse target
-    let (org_slug, game_slug, branch_name) = parse_target(&target)?;
+    let (org_slug, game_slug, branch_slug) = parse_target(&target)?;
     
     // Verify source directory exists
     if !source.exists() {
@@ -170,7 +170,7 @@ pub async fn handle_build_push(
 
 
     // Get temporary R2 credentials
-    let creds = get_temp_credentials(&org_slug, &game_slug, &branch_name, &engine, &engine_version, &api_key).await?;
+    let creds = get_temp_credentials(&org_slug, &game_slug, &branch_slug, &engine, &engine_version, &api_key).await?;
     
     // Create R2 config for rclone
     let r2_config = R2Config {
@@ -191,7 +191,7 @@ pub async fn handle_build_push(
     ).await?;
 
     // Notify the server that upload is complete
-    notify_upload_complete(&org_slug, &game_slug, &branch_name, &creds.game_build_id, &api_key).await?;
+    notify_upload_complete(&org_slug, &game_slug, &branch_slug, &creds.game_build_id, &api_key).await?;
 
     Ok(())
 }

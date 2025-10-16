@@ -43,7 +43,7 @@ enum AuthCommands {
 #[derive(Subcommand)]
 enum BuildCommands {
     Push {
-        #[arg(help = "Target in format: org_slug/game_slug:branch_name")]
+        #[arg(help = "Target in format: org_slug/game_slug:branch_slug")]
         target: String,
         #[arg(short = 'e', long, help = "Game engine (e.g., godot, unity, unreal)")]
         engine: String,
