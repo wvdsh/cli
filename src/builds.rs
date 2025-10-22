@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use crate::auth::AuthManager;
-use crate::config;
+use crate::config::{self, WavedashConfig};
 use crate::rclone::{RcloneManager, R2Config};
 
 #[derive(Debug, Deserialize)]
@@ -42,41 +42,32 @@ struct TempCredsResponse {
     expires_in: u64,
 }
 
-fn parse_target(target: &str) -> Result<(String, String, String)> {
-    let parts: Vec<&str> = target.split(':').collect();
-    if parts.len() != 2 {
-        anyhow::bail!("Invalid target format. Expected: org_slug/game_slug:branch_slug");
-    }
-
-    let branch_slug = parts[1].to_string();
-    let org_game: Vec<&str> = parts[0].split('/').collect();
-    if org_game.len() != 2 {
-        anyhow::bail!("Invalid target format. Expected: org_slug/game_slug:branch_slug");
-    }
-
-    Ok((org_game[0].to_string(), org_game[1].to_string(), branch_slug))
-}
-
 async fn get_temp_credentials(
     org_slug: &str,
     game_slug: &str,
     branch_slug: &str,
     engine: &str,
     engine_version: &str,
+    entrypoint: Option<&str>,
     api_key: &str,
 ) -> Result<TempCredsResponse> {
     let client = reqwest::Client::new();
     let api_host = config::get("api_host")?;
-    
+
     let url = format!(
         "{}/api/organizations/{}/games/{}/branches/{}/builds/create-temp-r2-creds",
         api_host, org_slug, game_slug, branch_slug
     );
 
-    let request_body = serde_json::json!({
+    let mut request_body = serde_json::json!({
         "engine": engine,
         "engineVersion": engine_version
     });
+
+    // Add entrypoint if provided
+    if let Some(ep) = entrypoint {
+        request_body["entrypoint"] = serde_json::json!(ep);
+    }
 
     let response = client
         .post(&url)
@@ -146,32 +137,41 @@ async fn notify_upload_complete(
 }
 
 pub async fn handle_build_push(
-    target: String,
-    engine: String,
-    engine_version: String,
-    source: PathBuf,
+    config_path: PathBuf,
     verbose: bool,
 ) -> Result<()> {
+    // Load wavedash.toml config
+    let wavedash_config = WavedashConfig::load(&config_path)?;
+
     // Check authentication
     let auth_manager = AuthManager::new()?;
     let api_key = auth_manager.get_api_key()
         .ok_or_else(|| anyhow::anyhow!("Not authenticated. Run 'wvdsh auth login' first."))?;
 
-    // Parse target
-    let (org_slug, game_slug, branch_slug) = parse_target(&target)?;
-    
-    // Verify source directory exists
-    if !source.exists() {
-        anyhow::bail!("Source directory does not exist: {}", source.display());
-    }
-    if !source.is_dir() {
-        anyhow::bail!("Source must be a directory: {}", source.display());
-    }
+    // Resolve upload_dir relative to the config file's directory
+    let config_dir = config_path.parent()
+        .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?;
+    let upload_dir = config_dir.join(&wavedash_config.upload_dir);
 
+    // Verify source directory exists
+    if !upload_dir.exists() {
+        anyhow::bail!("Source directory does not exist: {}", upload_dir.display());
+    }
+    if !upload_dir.is_dir() {
+        anyhow::bail!("Source must be a directory: {}", upload_dir.display());
+    }
 
     // Get temporary R2 credentials
-    let creds = get_temp_credentials(&org_slug, &game_slug, &branch_slug, &engine, &engine_version, &api_key).await?;
-    
+    let creds = get_temp_credentials(
+        &wavedash_config.org_slug,
+        &wavedash_config.game_slug,
+        &wavedash_config.branch_slug,
+        &wavedash_config.engine.engine_type,
+        &wavedash_config.engine.version,
+        wavedash_config.engine.entrypoint.as_deref(),
+        &api_key
+    ).await?;
+
     // Create R2 config for rclone
     let r2_config = R2Config {
         access_key_id: creds.credentials.access_key_id,
@@ -183,7 +183,7 @@ pub async fn handle_build_push(
     // Initialize rclone and upload
     let mut rclone = RcloneManager::new(verbose)?;
     rclone.sync_to_r2(
-        source.to_str().unwrap(),
+        upload_dir.to_str().unwrap(),
         &creds.bucket_name,
         &creds.r2_key_prefix,
         &r2_config,
@@ -191,7 +191,13 @@ pub async fn handle_build_push(
     ).await?;
 
     // Notify the server that upload is complete
-    notify_upload_complete(&org_slug, &game_slug, &branch_slug, &creds.game_build_id, &api_key).await?;
+    notify_upload_complete(
+        &wavedash_config.org_slug,
+        &wavedash_config.game_slug,
+        &wavedash_config.branch_slug,
+        &creds.game_build_id,
+        &api_key
+    ).await?;
 
     Ok(())
 }

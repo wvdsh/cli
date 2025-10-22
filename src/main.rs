@@ -43,14 +43,8 @@ enum AuthCommands {
 #[derive(Subcommand)]
 enum BuildCommands {
     Push {
-        #[arg(help = "Target in format: org_slug/game_slug:branch_slug")]
-        target: String,
-        #[arg(short = 'e', long, help = "Game engine (e.g., godot, unity, unreal)")]
-        engine: String,
-        #[arg(short = 'v', long = "version", help = "Engine version (e.g., 4.5-beta)")]
-        engine_version: String,
-        #[arg(help = "Source directory to upload", default_value = ".")]
-        source: std::path::PathBuf,
+        #[arg(short = 'c', long = "config", help = "Path to wavedash.toml config file", default_value = "./wavedash.toml")]
+        config: std::path::PathBuf,
     },
 }
 
@@ -105,8 +99,8 @@ async fn main() -> Result<()> {
         }
         Commands::Build { action } => {
             match action {
-                BuildCommands::Push { target, engine, engine_version, source } => {
-                    handle_build_push(target, engine, engine_version, source, cli.verbose).await?;
+                BuildCommands::Push { config } => {
+                    handle_build_push(config, cli.verbose).await?;
                 }
             }
         }

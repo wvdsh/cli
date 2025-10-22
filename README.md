@@ -1,31 +1,3 @@
-# Wavedash CLI
-
-Cross-platform CLI tool for uploading game projects to wavedash.gg.
-
-## Installation
-
-```bash
-cargo install wavedash
-```
-
-## Development
-
-Copy `config.toml.example` to `config.toml` and customize for local development:
-
-```bash
-cp config.toml.example config.toml
-# Edit config.toml to point to your local/staging environment
-cargo run
-```
-
-The CLI defaults to production config when `config.toml` doesn't exist (for published releases).
-
-### Building
-
-```bash
-cargo build --release
-```
-
 ## Commands
 
 ### Authentication
@@ -40,8 +12,48 @@ wvdsh auth status         # Check auth status
 ### Build Management
 
 ```bash
-wvdsh build push <org_slug>/<game_slug>:<branch> -e <engine> -v <version> [source_dir]
-
-# Example:
-wvdsh build push myorg/mygame:main -e godot -v 4.3 ./build
+wvdsh build push
 ```
+
+## Wavedash Toml
+
+### Unity `wavedash.toml`
+
+```
+game_slug = "ski-trooper"
+branch_slug = "production"
+upload_dir = "./builds/webgpu"
+
+[engine]
+type = "unity"
+version = "6000.0.2f1"
+```
+
+### Custom Engine `wavedash.toml`
+
+```
+game_slug = "ski-trooper"
+branch_slug = "production"
+upload_dir = "./builds/webgpu"
+
+# wavedash.toml for aground
+[engine]
+type = "custom"
+version = "0.0.1"
+entrypoint = "web-entrypoint.js"
+```
+
+### Godot `wavedash.toml`
+
+```
+game_slug = "ski-trooper"
+branch_slug = "production"
+upload_dir = "./builds/webgpu"
+
+[engine]
+type = "godot"
+version = "4.5-stable"
+```
+
+
+
