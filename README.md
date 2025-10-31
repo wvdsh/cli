@@ -17,42 +17,49 @@ wvdsh build push
 
 ## Wavedash Toml
 
+All configs require these fields:
+- `org_slug`
+- `game_slug`
+- `branch_slug`
+- `upload_dir`
+
+Then include exactly one engine section: `[godot]`, `[unity]`, or `[custom]`.
+
+### Godot `wavedash.toml`
+
+```
+org_slug = "franz-labs-inc"
+game_slug = "pgrc"
+branch_slug = "internal-1"
+upload_dir = "./builds/webgl"
+
+[godot]
+version = "4.5-stable"
+```
+
 ### Unity `wavedash.toml`
 
 ```
-game_slug = "ski-trooper"
-branch_slug = "production"
-upload_dir = "./builds/webgpu"
+org_slug = "franz-labs-inc"
+game_slug = "pgrc"
+branch_slug = "internal-1"
+upload_dir = "./builds/webgl"
 
-[engine]
-type = "unity"
+[unity]
 version = "6000.0.2f1"
 ```
 
 ### Custom Engine `wavedash.toml`
 
 ```
-game_slug = "ski-trooper"
-branch_slug = "production"
-upload_dir = "./builds/webgpu"
+org_slug = "franz-labs-inc"
+game_slug = "pgrc"
+branch_slug = "internal-1"
+upload_dir = "./builds/webgl"
 
-# wavedash.toml for aground
-[engine]
-type = "custom"
+[custom]
 version = "0.0.1"
-entrypoint = "web-entrypoint.js"
-```
-
-### Godot `wavedash.toml`
-
-```
-game_slug = "ski-trooper"
-branch_slug = "production"
-upload_dir = "./builds/webgpu"
-
-[engine]
-type = "godot"
-version = "4.5-stable"
+entrypoint = "x"
 ```
 
 

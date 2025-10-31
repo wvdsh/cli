@@ -33,11 +33,19 @@ pub fn get(key: &str) -> Result<String> {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct EngineConfig {
-    #[serde(rename = "type")]
-    pub engine_type: String,
+pub struct GodotSection {
     pub version: String,
-    pub entrypoint: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UnitySection {
+    pub version: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CustomSection {
+    pub version: String,
+    pub entrypoint: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,7 +54,15 @@ pub struct WavedashConfig {
     pub game_slug: String,
     pub branch_slug: String,
     pub upload_dir: PathBuf,
-    pub engine: EngineConfig,
+    
+    #[serde(rename = "godot")]
+    pub godot: Option<GodotSection>,
+    
+    #[serde(rename = "unity")]
+    pub unity: Option<UnitySection>,
+    
+    #[serde(rename = "custom")]
+    pub custom: Option<CustomSection>,
 }
 
 impl WavedashConfig {
@@ -58,5 +74,30 @@ impl WavedashConfig {
             .map_err(|e| anyhow::anyhow!("Failed to parse config file: {}", e))?;
 
         Ok(config)
+    }
+
+    pub fn engine_type(&self) -> Result<&str> {
+        match (self.godot.is_some(), self.unity.is_some(), self.custom.is_some()) {
+            (true, false, false) => Ok("godot"),
+            (false, true, false) => Ok("unity"),
+            (false, false, true) => Ok("custom"),
+            _ => anyhow::bail!("Config must have exactly one of [godot], [unity], or [custom] sections"),
+        }
+    }
+
+    pub fn version(&self) -> Result<&str> {
+        if let Some(ref godot) = self.godot {
+            Ok(&godot.version)
+        } else if let Some(ref unity) = self.unity {
+            Ok(&unity.version)
+        } else if let Some(ref custom) = self.custom {
+            Ok(&custom.version)
+        } else {
+            anyhow::bail!("No engine section found")
+        }
+    }
+
+    pub fn entrypoint(&self) -> Option<&str> {
+        self.custom.as_ref().map(|c| c.entrypoint.as_str())
     }
 }
