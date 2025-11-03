@@ -166,9 +166,9 @@ pub async fn handle_build_push(
         &wavedash_config.org_slug,
         &wavedash_config.game_slug,
         &wavedash_config.branch_slug,
-        &wavedash_config.engine.engine_type,
-        &wavedash_config.engine.version,
-        wavedash_config.engine.entrypoint.as_deref(),
+        wavedash_config.engine_type()?,
+        wavedash_config.version()?,
+        wavedash_config.entrypoint(),
         &api_key
     ).await?;
 
@@ -180,8 +180,15 @@ pub async fn handle_build_push(
         endpoint: creds.endpoint,
     };
 
+    // Copy wavedash.toml into the upload directory so it gets synced with everything
+    let config_dest = upload_dir.join("wavedash.toml");
+    std::fs::copy(&config_path, &config_dest)
+        .map_err(|e| anyhow::anyhow!("Failed to copy config to upload dir: {}", e))?;
+
     // Initialize rclone and upload
     let mut rclone = RcloneManager::new(verbose)?;
+    
+    // Upload the build directory (including wavedash.toml)
     rclone.sync_to_r2(
         upload_dir.to_str().unwrap(),
         &creds.bucket_name,
@@ -189,6 +196,9 @@ pub async fn handle_build_push(
         &r2_config,
         verbose,
     ).await?;
+
+    // Clean up the copied config file
+    let _ = std::fs::remove_file(&config_dest);
 
     // Notify the server that upload is complete
     notify_upload_complete(
