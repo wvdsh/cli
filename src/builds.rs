@@ -181,9 +181,15 @@ pub async fn handle_build_push(
     };
 
     // Copy wavedash.toml into the upload directory so it gets synced with everything
+    // (but only if it's not already there)
     let config_dest = upload_dir.join("wavedash.toml");
-    std::fs::copy(&config_path, &config_dest)
-        .map_err(|e| anyhow::anyhow!("Failed to copy config to upload dir: {}", e))?;
+    let should_cleanup = if config_path.canonicalize()? != config_dest.canonicalize().unwrap_or_default() {
+        std::fs::copy(&config_path, &config_dest)
+            .map_err(|e| anyhow::anyhow!("Failed to copy config to upload dir: {}", e))?;
+        true
+    } else {
+        false
+    };
 
     // Initialize rclone and upload
     let mut rclone = RcloneManager::new(verbose)?;
@@ -197,8 +203,10 @@ pub async fn handle_build_push(
         verbose,
     ).await?;
 
-    // Clean up the copied config file
-    let _ = std::fs::remove_file(&config_dest);
+    // Clean up the copied config file (only if we copied it)
+    if should_cleanup {
+        let _ = std::fs::remove_file(&config_dest);
+    }
 
     // Notify the server that upload is complete
     notify_upload_complete(
