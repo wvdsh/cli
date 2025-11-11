@@ -60,53 +60,46 @@ pub fn login_with_browser() -> Result<String> {
     );
 
     println!("Opening browser for authentication...");
+    println!("Auth URL: {}", auth_url);
     open::that(&auth_url)?;
 
     let server = Server::http(format!("127.0.0.1:{}", port))
         .map_err(|e| anyhow::anyhow!("Failed to start server: {}", e))?;
     println!("Waiting for authorization...");
 
-    for mut request in server.incoming_requests() {
-        let cors_header = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..])
-            .unwrap();
+    for request in server.incoming_requests() {
+        let url = request.url().to_string();
         
-        match request.method() {
-            &Method::Options => {
-                // Handle CORS preflight
+        // Parse query parameters from the URL
+        if url.contains('?') {
+            let query_string = url.split('?').nth(1).unwrap_or("");
+            let params: std::collections::HashMap<String, String> = query_string
+                .split('&')
+                .filter_map(|pair| {
+                    let mut parts = pair.split('=');
+                    let key = parts.next()?.to_string();
+                    let value = parts.next()?.to_string();
+                    Some((key, value))
+                })
+                .collect();
+            
+            // Check for api_key - assume positive response
+            if let (Some(api_key), Some(return_url)) = (params.get("api_key"), params.get("return_url")) {
+                // Decode the return_url since it comes URL-encoded
+                let decoded_return_url = urlencoding::decode(return_url).unwrap_or(std::borrow::Cow::Borrowed(return_url));
+                
+                // Add success param to return URL
+                let redirect_url = if decoded_return_url.contains('?') {
+                    format!("{}&success=true", decoded_return_url)
+                } else {
+                    format!("{}?success=true", decoded_return_url)
+                };
+                let location_header = Header::from_bytes(&b"Location"[..], redirect_url.as_bytes()).unwrap();
                 let response = Response::from_string("")
-                    .with_header(cors_header.clone())
-                    .with_header(Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"POST, OPTIONS"[..]).unwrap())
-                    .with_header(Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type"[..]).unwrap());
+                    .with_status_code(302)
+                    .with_header(location_header);
                 let _ = request.respond(response);
-            }
-            &Method::Post => {
-                let mut body = String::new();
-                request.as_reader().read_to_string(&mut body)?;
-                
-                let data: serde_json::Value = serde_json::from_str(&body)?;
-                
-                let response = Response::from_string("OK").with_header(cors_header);
-                let _ = request.respond(response);
-                
-                if let (Some(received_state), Some(api_key)) = (
-                    data["state"].as_str(),
-                    data["api_key"].as_str()
-                ) {
-                    if received_state == state {
-                        return Ok(api_key.to_string());
-                    } else {
-                        anyhow::bail!("State mismatch");
-                    }
-                }
-                
-                if data["error"].is_string() {
-                    anyhow::bail!("Authentication failed: {}", data["error"].as_str().unwrap_or("Unknown error"));
-                }
-            }
-            _ => {
-                // Handle GET requests
-                let response = Response::from_string("Waiting for authorization...").with_header(cors_header);
-                let _ = request.respond(response);
+                return Ok(api_key.to_string());
             }
         }
     }
