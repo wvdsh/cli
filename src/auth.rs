@@ -1,11 +1,8 @@
 use anyhow::Result;
 use keyring::Entry;
 use std::net::TcpListener;
-use tiny_http::{Server, Response, Method, Header};
+use tiny_http::{Server, Response, Header};
 use crate::config;
-
-const SERVICE_NAME: &str = "wvdsh";
-const API_KEY_ACCOUNT: &str = "api-key";
 
 pub struct AuthManager {
     api_key_entry: Entry,
@@ -13,7 +10,8 @@ pub struct AuthManager {
 
 impl AuthManager {
     pub fn new() -> Result<Self> {
-        let api_key_entry = Entry::new(SERVICE_NAME, API_KEY_ACCOUNT)?;
+        let keyring = config::keyring_config()?;
+        let api_key_entry = Entry::new(&keyring.service, &keyring.account)?;
         Ok(Self { api_key_entry })
     }
 

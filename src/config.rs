@@ -6,6 +6,10 @@ use std::path::PathBuf;
 struct Config {
     open_browser_website_host: String,
     api_host: String,
+    #[serde(default)]
+    keyring_service: Option<String>,
+    #[serde(default)]
+    keyring_account: Option<String>,
 }
 
 impl Config {
@@ -19,6 +23,8 @@ impl Config {
         Ok(Self {
             open_browser_website_host: "https://wavedash.gg".to_string(),
             api_host: "https://convex-http.wavedash.gg".to_string(),
+            keyring_service: None,
+            keyring_account: None,
         })
     }
 }
@@ -30,6 +36,26 @@ pub fn get(key: &str) -> Result<String> {
         "api_host" => Ok(config.api_host),
         _ => anyhow::bail!("Unknown config key: {}", key),
     }
+}
+
+#[derive(Debug)]
+pub struct KeyringConfig {
+    pub service: String,
+    pub account: String,
+}
+
+pub fn keyring_config() -> Result<KeyringConfig> {
+    let config = Config::load()?;
+    Ok(KeyringConfig {
+        service: config
+            .keyring_service
+            .clone()
+            .unwrap_or_else(|| "wvdsh".to_string()),
+        account: config
+            .keyring_account
+            .clone()
+            .unwrap_or_else(|| "api-key".to_string()),
+    })
 }
 
 #[derive(Debug, Deserialize)]

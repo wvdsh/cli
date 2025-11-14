@@ -1,7 +1,6 @@
 mod auth;
 mod builds;
 mod config;
-mod rclone;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};

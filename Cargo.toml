@@ -18,10 +18,10 @@ path = "src/main.rs"
 [dependencies]
 # CLI Framework
 clap = { version = "4.5", features = ["derive", "env"] }
-clap_complete = "4.5"
 
 # Async Runtime
 tokio = { version = "1.40", features = ["full"] }
+futures = "0.3"
 
 # HTTP Client
 reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
@@ -37,22 +37,16 @@ thiserror = "1.0"
 
 # Progress & UI
 indicatif = "0.17"
-colored = "2.1"
 
 # Cross-platform paths
 directories = "5.0"
 
-# Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Object storage uploads
+opendal = { version = "0.49", features = ["services-s3"] }
 
 # File operations
-sha2 = "0.10"
 walkdir = "2.5"
 tempfile = "3.10"
-flate2 = "1.0"
-tar = "0.4"
-zip = "2.1"
 
 # Authentication
 keyring = { version = "3.0", features = ["apple-native", "windows-native", "linux-native"] }
@@ -60,8 +54,6 @@ tiny_http = "0.12"
 open = "5.0"
 url = "2.5"
 urlencoding = "2.1"
-strip-ansi-escapes = "0.2"
-portable-pty = "0.8"
 
 
 

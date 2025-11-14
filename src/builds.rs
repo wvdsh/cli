@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use crate::auth::AuthManager;
 use crate::config::{self, WavedashConfig};
-use crate::rclone::{RcloneManager, R2Config};
+#[path = "uploader.rs"]
+mod uploader;
+
+use uploader::{R2Config, R2Uploader};
 
 #[derive(Debug, Deserialize)]
 struct ApiErrorResponse {
@@ -172,7 +175,7 @@ pub async fn handle_build_push(
         &api_key
     ).await?;
 
-    // Create R2 config for rclone
+    // Create R2 config for uploader
     let r2_config = R2Config {
         access_key_id: creds.credentials.access_key_id,
         secret_access_key: creds.credentials.secret_access_key,
@@ -191,15 +194,11 @@ pub async fn handle_build_push(
         false
     };
 
-    // Initialize rclone and upload
-    let mut rclone = RcloneManager::new(verbose)?;
-    
-    // Upload the build directory (including wavedash.toml)
-    rclone.sync_to_r2(
-        upload_dir.to_str().unwrap(),
-        &creds.bucket_name,
+    // Initialize uploader and upload
+    let uploader = R2Uploader::new(&r2_config, &creds.bucket_name)?;
+    uploader.upload_directory(
+        upload_dir.as_path(),
         &creds.r2_key_prefix,
-        &r2_config,
         verbose,
     ).await?;
 
