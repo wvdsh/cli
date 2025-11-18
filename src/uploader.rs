@@ -49,8 +49,7 @@ impl R2Uploader {
             builder = builder.session_token(&config.session_token);
         }
 
-        let operator = Operator::new(builder)?
-            .finish();
+        let operator = Operator::new(builder)?.finish();
 
         Ok(Self {
             operator,
@@ -245,4 +244,3 @@ fn format_bytes(bytes: u64) -> String {
         format!("{:.2} {}", value, UNITS[unit_index])
     }
 }
-

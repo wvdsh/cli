@@ -7,9 +7,9 @@ struct Config {
     open_browser_website_host: String,
     api_host: String,
     #[serde(default)]
-    keyring_service: Option<String>,
+    keyring_service: String,
     #[serde(default)]
-    keyring_account: Option<String>,
+    keyring_account: String,
 }
 
 impl Config {
@@ -23,8 +23,8 @@ impl Config {
         Ok(Self {
             open_browser_website_host: "https://wavedash.gg".to_string(),
             api_host: "https://convex-http.wavedash.gg".to_string(),
-            keyring_service: None,
-            keyring_account: None,
+            keyring_service: "wvdsh".to_string(),
+            keyring_account: "api-key".to_string(),
         })
     }
 }
@@ -47,14 +47,8 @@ pub struct KeyringConfig {
 pub fn keyring_config() -> Result<KeyringConfig> {
     let config = Config::load()?;
     Ok(KeyringConfig {
-        service: config
-            .keyring_service
-            .clone()
-            .unwrap_or_else(|| "wvdsh".to_string()),
-        account: config
-            .keyring_account
-            .clone()
-            .unwrap_or_else(|| "api-key".to_string()),
+        service: config.keyring_service.clone(),
+        account: config.keyring_account.clone(),
     })
 }
 
@@ -80,21 +74,51 @@ pub struct WavedashConfig {
     pub game_slug: String,
     pub branch_slug: String,
     pub upload_dir: PathBuf,
-    
+
     #[serde(rename = "godot")]
     pub godot: Option<GodotSection>,
-    
+
     #[serde(rename = "unity")]
     pub unity: Option<UnitySection>,
-    
+
     #[serde(rename = "custom")]
     pub custom: Option<CustomSection>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineKind {
+    Godot,
+    Unity,
+    Custom,
+}
+
+impl EngineKind {
+    pub fn as_config_key(&self) -> &'static str {
+        match self {
+            EngineKind::Godot => "godot",
+            EngineKind::Unity => "unity",
+            EngineKind::Custom => "custom",
+        }
+    }
+
+    pub fn as_label(&self) -> &'static str {
+        match self {
+            EngineKind::Godot => "GODOT",
+            EngineKind::Unity => "UNITY",
+            EngineKind::Custom => "CUSTOM",
+        }
+    }
+}
+
 impl WavedashConfig {
     pub fn load(config_path: &PathBuf) -> Result<Self> {
-        let config_content = std::fs::read_to_string(config_path)
-            .map_err(|e| anyhow::anyhow!("Failed to read config file at {}: {}", config_path.display(), e))?;
+        let config_content = std::fs::read_to_string(config_path).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to read config file at {}: {}",
+                config_path.display(),
+                e
+            )
+        })?;
 
         let config: WavedashConfig = toml::from_str(&config_content)
             .map_err(|e| anyhow::anyhow!("Failed to parse config file: {}", e))?;
@@ -102,12 +126,18 @@ impl WavedashConfig {
         Ok(config)
     }
 
-    pub fn engine_type(&self) -> Result<&str> {
-        match (self.godot.is_some(), self.unity.is_some(), self.custom.is_some()) {
-            (true, false, false) => Ok("godot"),
-            (false, true, false) => Ok("unity"),
-            (false, false, true) => Ok("custom"),
-            _ => anyhow::bail!("Config must have exactly one of [godot], [unity], or [custom] sections"),
+    pub fn engine_type(&self) -> Result<EngineKind> {
+        match (
+            self.godot.is_some(),
+            self.unity.is_some(),
+            self.custom.is_some(),
+        ) {
+            (true, false, false) => Ok(EngineKind::Godot),
+            (false, true, false) => Ok(EngineKind::Unity),
+            (false, false, true) => Ok(EngineKind::Custom),
+            _ => anyhow::bail!(
+                "Config must have exactly one of [godot], [unity], or [custom] sections"
+            ),
         }
     }
 

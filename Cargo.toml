@@ -23,8 +23,14 @@ clap = { version = "4.5", features = ["derive", "env"] }
 tokio = { version = "1.40", features = ["full"] }
 futures = "0.3"
 
-# HTTP Client
+# HTTP & Servers
 reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
+axum = { version = "0.7", default-features = false, features = ["http1", "tokio"] }
+axum-server = { version = "0.6", features = ["tls-rustls"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "fs", "trace"] }
+rcgen = "0.12"
+dialoguer = "0.11"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -47,6 +53,7 @@ opendal = { version = "0.49", features = ["services-s3"] }
 # File operations
 walkdir = "2.5"
 tempfile = "3.10"
+mime_guess = "2.0"
 
 # Authentication
 keyring = { version = "3.0", features = ["apple-native", "windows-native", "linux-native"] }
@@ -54,6 +61,7 @@ tiny_http = "0.12"
 open = "5.0"
 url = "2.5"
 urlencoding = "2.1"
+
 
 
 
