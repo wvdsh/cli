@@ -1,8 +1,8 @@
+use crate::auth::AuthManager;
+use crate::config::{self, WavedashConfig};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use crate::auth::AuthManager;
-use crate::config::{self, WavedashConfig};
 #[path = "uploader.rs"]
 mod uploader;
 
@@ -82,7 +82,7 @@ async fn get_temp_credentials(
 
     if !response.status().is_success() {
         let error_text = response.text().await?;
-        
+
         // Try to parse the API error response
         if let Ok(api_error_response) = serde_json::from_str::<ApiErrorResponse>(&error_text) {
             // Try to parse the nested error JSON
@@ -90,7 +90,7 @@ async fn get_temp_credentials(
                 anyhow::bail!("{}", api_error.message);
             }
         }
-        
+
         // Fallback to raw error text if parsing fails
         anyhow::bail!("API request failed: {}", error_text);
     }
@@ -108,7 +108,7 @@ async fn notify_upload_complete(
 ) -> Result<()> {
     let client = reqwest::Client::new();
     let api_host = config::get("api_host")?;
-    
+
     let url = format!(
         "{}/api/organizations/{}/games/{}/branches/{}/builds/{}/upload-completed",
         api_host, org_slug, game_slug, branch_slug, build_id
@@ -123,7 +123,7 @@ async fn notify_upload_complete(
 
     if !response.status().is_success() {
         let error_text = response.text().await?;
-        
+
         // Try to parse the API error response
         if let Ok(api_error_response) = serde_json::from_str::<ApiErrorResponse>(&error_text) {
             // Try to parse the nested error JSON
@@ -131,7 +131,7 @@ async fn notify_upload_complete(
                 anyhow::bail!("{}", api_error.message);
             }
         }
-        
+
         // Fallback to raw error text if parsing fails
         anyhow::bail!("API request failed: {}", error_text);
     }
@@ -139,20 +139,19 @@ async fn notify_upload_complete(
     Ok(())
 }
 
-pub async fn handle_build_push(
-    config_path: PathBuf,
-    verbose: bool,
-) -> Result<()> {
+pub async fn handle_build_push(config_path: PathBuf, verbose: bool) -> Result<()> {
     // Load wavedash.toml config
     let wavedash_config = WavedashConfig::load(&config_path)?;
 
     // Check authentication
     let auth_manager = AuthManager::new()?;
-    let api_key = auth_manager.get_api_key()
+    let api_key = auth_manager
+        .get_api_key()
         .ok_or_else(|| anyhow::anyhow!("Not authenticated. Run 'wvdsh auth login' first."))?;
 
     // Resolve upload_dir relative to the config file's directory
-    let config_dir = config_path.parent()
+    let config_dir = config_path
+        .parent()
         .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?;
     let upload_dir = config_dir.join(&wavedash_config.upload_dir);
 
@@ -165,15 +164,17 @@ pub async fn handle_build_push(
     }
 
     // Get temporary R2 credentials
+    let engine_kind = wavedash_config.engine_type()?;
     let creds = get_temp_credentials(
         &wavedash_config.org_slug,
         &wavedash_config.game_slug,
         &wavedash_config.branch_slug,
-        wavedash_config.engine_type()?,
+        engine_kind.as_config_key(),
         wavedash_config.version()?,
         wavedash_config.entrypoint(),
-        &api_key
-    ).await?;
+        &api_key,
+    )
+    .await?;
 
     // Create R2 config for uploader
     let r2_config = R2Config {
@@ -186,21 +187,20 @@ pub async fn handle_build_push(
     // Copy wavedash.toml into the upload directory so it gets synced with everything
     // (but only if it's not already there)
     let config_dest = upload_dir.join("wavedash.toml");
-    let should_cleanup = if config_path.canonicalize()? != config_dest.canonicalize().unwrap_or_default() {
-        std::fs::copy(&config_path, &config_dest)
-            .map_err(|e| anyhow::anyhow!("Failed to copy config to upload dir: {}", e))?;
-        true
-    } else {
-        false
-    };
+    let should_cleanup =
+        if config_path.canonicalize()? != config_dest.canonicalize().unwrap_or_default() {
+            std::fs::copy(&config_path, &config_dest)
+                .map_err(|e| anyhow::anyhow!("Failed to copy config to upload dir: {}", e))?;
+            true
+        } else {
+            false
+        };
 
     // Initialize uploader and upload
     let uploader = R2Uploader::new(&r2_config, &creds.bucket_name)?;
-    uploader.upload_directory(
-        upload_dir.as_path(),
-        &creds.r2_key_prefix,
-        verbose,
-    ).await?;
+    uploader
+        .upload_directory(upload_dir.as_path(), &creds.r2_key_prefix, verbose)
+        .await?;
 
     // Clean up the copied config file (only if we copied it)
     if should_cleanup {
@@ -213,8 +213,9 @@ pub async fn handle_build_push(
         &wavedash_config.game_slug,
         &wavedash_config.branch_slug,
         &creds.game_build_id,
-        &api_key
-    ).await?;
+        &api_key,
+    )
+    .await?;
 
     Ok(())
 }

@@ -1,11 +1,14 @@
 mod auth;
 mod builds;
 mod config;
+mod dev;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
-use auth::{AuthManager, login_with_browser};
+use auth::{login_with_browser, AuthManager};
 use builds::handle_build_push;
+use clap::{Parser, Subcommand};
+use dev::handle_dev;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "wvdsh")]
@@ -27,6 +30,10 @@ enum Commands {
         #[command(subcommand)]
         action: BuildCommands,
     },
+    Dev {
+        #[command(subcommand)]
+        action: DevCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -42,8 +49,25 @@ enum AuthCommands {
 #[derive(Subcommand)]
 enum BuildCommands {
     Push {
-        #[arg(short = 'c', long = "config", help = "Path to wavedash.toml config file", default_value = "./wavedash.toml")]
-        config: std::path::PathBuf,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum DevCommands {
+    Serve {
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file"
+        )]
+        config: Option<PathBuf>,
     },
 }
 
@@ -54,7 +78,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Auth { action } => {
             let auth_manager = AuthManager::new()?;
-            
+
             match action {
                 AuthCommands::Login { token } => {
                     if let Some(api_key) = token {
@@ -84,7 +108,7 @@ async fn main() -> Result<()> {
                         println!("✓ Authenticated");
                         if let Some(api_key) = auth_manager.get_api_key() {
                             let preview = if api_key.len() > 10 {
-                                format!("{}...{}", &api_key[..6], &api_key[api_key.len()-3..])
+                                format!("{}...{}", &api_key[..6], &api_key[api_key.len() - 3..])
                             } else {
                                 "***".to_string()
                             };
@@ -96,13 +120,16 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Build { action } => {
-            match action {
-                BuildCommands::Push { config } => {
-                    handle_build_push(config, cli.verbose).await?;
-                }
+        Commands::Build { action } => match action {
+            BuildCommands::Push { config } => {
+                handle_build_push(config, cli.verbose).await?;
             }
-        }
+        },
+        Commands::Dev { action } => match action {
+            DevCommands::Serve { config } => {
+                handle_dev(config, cli.verbose).await?;
+            }
+        },
     }
 
     Ok(())

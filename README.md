@@ -15,6 +15,20 @@ wvdsh auth status         # Check auth status
 wvdsh build push
 ```
 
+### Dev Sandbox Server
+
+```bash
+wvdsh dev serve [--config ./wavedash.toml]
+```
+
+What it does:
+- Serves your `upload_dir` over HTTPS on a random localhost port with permissive CORS for wavedash.gg.
+- Generates (and reuses) self-signed certs stored under your OS config dir (e.g. `~/.config/wvdsh/dev-server/`). The CLI will prompt to auto-trust the cert (macOS via `sudo security add-trusted-cert`, Windows via `certutil`, Linux via `sudo cp ... && update-ca-certificates` when available).
+- Reads `wavedash.toml` to determine engine, version, entrypoint, and discovery of HTML exports (for Godot/Unity it scrapes the HTML to compute `entrypointParams`).
+- Prints a ready-to-click sandbox link that looks like `https://wavedash.gg/play/{game_slug}?branch_slug=...&localOrigin=https://localhost:{port}&sandbox=true&engine=...`.
+
+Tip: run the command from the repo root so the default `./wavedash.toml` is picked up automatically. Use `--config /path/to/wavedash.toml` only when needed.
+
 ## Wavedash Toml
 
 All configs require these fields:
