@@ -14,7 +14,9 @@ use tower_http::{
 };
 use url::Url;
 
+use crate::auth::AuthManager;
 use crate::config::{EngineKind, WavedashConfig};
+use crate::file_staging::FileStaging;
 
 mod cert;
 mod entrypoint;
@@ -28,6 +30,12 @@ use sandbox::build_sandbox_url;
 const DEFAULT_CONFIG: &str = "./wavedash.toml";
 
 pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<()> {
+    // Check authentication
+    let auth_manager = AuthManager::new()?;
+    let _api_key = auth_manager
+        .get_api_key()
+        .ok_or_else(|| anyhow::anyhow!("Not authenticated. Run 'wvdsh auth login' first."))?;
+
     let config_path = config_path.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
     if !config_path.exists() {
         anyhow::bail!(
@@ -60,6 +68,9 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
     } else {
         None
     };
+
+    // Copy necessary files to upload directory
+    let staging = FileStaging::prepare(&config_path, &config_dir, &upload_dir, &wavedash_config)?;
 
     let html_entrypoint = locate_html_entrypoint(&upload_dir);
     let entrypoint_params = match engine_kind {
@@ -125,6 +136,9 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
     }
 
     server.await?;
+
+    // Clean up any temporary files
+    staging.cleanup();
 
     Ok(())
 }

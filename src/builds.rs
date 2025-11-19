@@ -1,5 +1,6 @@
 use crate::auth::AuthManager;
 use crate::config::{self, WavedashConfig};
+use crate::file_staging::FileStaging;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -184,17 +185,8 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool) -> Result<()
         endpoint: creds.endpoint,
     };
 
-    // Copy wavedash.toml into the upload directory so it gets synced with everything
-    // (but only if it's not already there)
-    let config_dest = upload_dir.join("wavedash.toml");
-    let should_cleanup =
-        if config_path.canonicalize()? != config_dest.canonicalize().unwrap_or_default() {
-            std::fs::copy(&config_path, &config_dest)
-                .map_err(|e| anyhow::anyhow!("Failed to copy config to upload dir: {}", e))?;
-            true
-        } else {
-            false
-        };
+    // Copy necessary files to upload directory
+    let staging = FileStaging::prepare(&config_path, config_dir, &upload_dir, &wavedash_config)?;
 
     // Initialize uploader and upload
     let uploader = R2Uploader::new(&r2_config, &creds.bucket_name)?;
@@ -202,10 +194,8 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool) -> Result<()
         .upload_directory(upload_dir.as_path(), &creds.r2_key_prefix, verbose)
         .await?;
 
-    // Clean up the copied config file (only if we copied it)
-    if should_cleanup {
-        let _ = std::fs::remove_file(&config_dest);
-    }
+    // Clean up any temporary files
+    staging.cleanup();
 
     // Notify the server that upload is complete
     notify_upload_complete(

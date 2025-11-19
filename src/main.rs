@@ -2,6 +2,7 @@ mod auth;
 mod builds;
 mod config;
 mod dev;
+mod file_staging;
 
 use anyhow::Result;
 use auth::{login_with_browser, AuthManager};
@@ -31,8 +32,12 @@ enum Commands {
         action: BuildCommands,
     },
     Dev {
-        #[command(subcommand)]
-        action: DevCommands,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file"
+        )]
+        config: Option<PathBuf>,
     },
 }
 
@@ -59,17 +64,6 @@ enum BuildCommands {
     },
 }
 
-#[derive(Subcommand)]
-enum DevCommands {
-    Serve {
-        #[arg(
-            short = 'c',
-            long = "config",
-            help = "Path to wavedash.toml config file"
-        )]
-        config: Option<PathBuf>,
-    },
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -125,11 +119,9 @@ async fn main() -> Result<()> {
                 handle_build_push(config, cli.verbose).await?;
             }
         },
-        Commands::Dev { action } => match action {
-            DevCommands::Serve { config } => {
-                handle_dev(config, cli.verbose).await?;
-            }
-        },
+        Commands::Dev { config } => {
+            handle_dev(config, cli.verbose).await?;
+        }
     }
 
     Ok(())
