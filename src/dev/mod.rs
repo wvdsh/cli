@@ -3,7 +3,7 @@ use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use axum::{http::Method, middleware, routing::get_service, Router};
+use axum::{http::{Method, StatusCode}, middleware, routing::{get_service, head}, Router};
 use axum_server::{self, Handle};
 use mime_guess::from_path;
 use tokio::signal;
@@ -94,6 +94,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
     let serve_dir = ServeDir::new(upload_dir.clone()).append_index_html_on_directories(true);
 
     let app = Router::new()
+        .route("/", head(|| async { StatusCode::OK }))
         .fallback_service(get_service(serve_dir))
         .layer(
             ServiceBuilder::new()
@@ -157,7 +158,7 @@ fn build_cors_layer() -> Result<CorsLayer> {
     let allowed_domains = vec!["wavedash.gg".to_string(), "wavedash.lvh.me".to_string()];
     Ok(CorsLayer::new()
         .allow_credentials(true)
-        .allow_methods(AllowMethods::list(vec![Method::GET, Method::OPTIONS]))
+        .allow_methods(AllowMethods::list(vec![Method::GET, Method::HEAD, Method::OPTIONS]))
         .allow_headers(AllowHeaders::mirror_request())
         .allow_origin(AllowOrigin::predicate(move |origin, _| {
             origin
