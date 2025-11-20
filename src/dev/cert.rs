@@ -413,15 +413,34 @@ mod platform {
                     .to_str()
                     .ok_or_else(|| anyhow::anyhow!("Certificate path is not valid UTF-8"))?;
 
+                // Check if certutil exists
+                if Command::new("certutil").arg("-?").output().is_err() {
+                    anyhow::bail!(
+                        "certutil command not found. Please ensure Windows is fully updated and certutil is available in PATH."
+                    );
+                }
+
                 let output = Command::new("certutil")
-                    .args(["-user", "-addstore", "Root", "-f", cert_str])
+                    .args(["-user", "-addstore", "Root", cert_str])
                     .output()
                     .context("Failed to run certutil")?;
 
                 if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    
+                    // Provide helpful message
+                    eprintln!("\n❌ certutil failed to add certificate.");
+                    if !stdout.is_empty() {
+                        eprintln!("Output: {}", stdout.trim());
+                    }
+                    if !stderr.is_empty() {
+                        eprintln!("Error: {}", stderr.trim());
+                    }
+                    
                     anyhow::bail!(
-                        "certutil failed: {}",
-                        String::from_utf8_lossy(&output.stderr)
+                        "\nTo manually trust the certificate, run as Administrator:\n  certutil -addstore Root \"{}\"",
+                        cert_str
                     );
                 }
 
