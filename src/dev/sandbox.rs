@@ -43,17 +43,11 @@ pub fn build_sandbox_url(
     }
 
     // Now build the permission-grant URL on the subdomain
-    // Generate a timestamp-based subdomain like: {game_slug}-{timestamp}.sandbox.{host}
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-
     // Extract the host from the base URL (e.g., "staging.wavedash.gg")
     let host_url = Url::parse(&format!("https://{}", base.trim_start_matches("https://").trim_start_matches("http://")))?;
     let main_host = host_url.host_str().ok_or_else(|| anyhow::anyhow!("Could not extract host"))?;
 
-    let subdomain = format!("{}-{}.sandbox.{}", wavedash_config.game_slug, timestamp, main_host);
+    let subdomain = format!("{}.sandbox.{}", wavedash_config.game_slug, main_host);
     let permission_grant_url = format!("https://{}/sandbox/permission-grant", subdomain);
 
     let mut url = Url::parse(&permission_grant_url)?;
