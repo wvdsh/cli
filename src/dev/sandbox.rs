@@ -16,12 +16,14 @@ pub fn build_sandbox_url(
 ) -> Result<Url> {
     let host = config::get("open_browser_website_host")?;
     let base = host.trim_end_matches('/');
-    let full = format!("{}/play/{}", base, wavedash_config.game_slug);
-    let mut url =
-        Url::parse(&full).with_context(|| format!("Unable to parse website host {}", full))?;
+
+    // First, build the game URL (what will be the rdurl parameter)
+    let game_url_full = format!("{}/play/{}", base, wavedash_config.game_slug);
+    let mut game_url = Url::parse(&game_url_full)
+        .with_context(|| format!("Unable to parse website host {}", game_url_full))?;
 
     {
-        let mut pairs = url.query_pairs_mut();
+        let mut pairs = game_url.query_pairs_mut();
         pairs.append_pair(UrlParams::GAME_SUBDOMAIN, &wavedash_config.game_slug);
         pairs.append_pair(UrlParams::GAME_BRANCH_SLUG, &wavedash_config.branch_slug);
         pairs.append_pair(UrlParams::GAME_CLOUD_ID, &wavedash_config.org_slug);
@@ -38,6 +40,28 @@ pub fn build_sandbox_url(
             let serialized = serde_json::to_string(params)?;
             pairs.append_pair(UrlParams::ENTRYPOINT_PARAMS, &serialized);
         }
+    }
+
+    // Now build the permission-grant URL on the subdomain
+    // Generate a timestamp-based subdomain like: {game_slug}-{timestamp}.sandbox.{host}
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+
+    // Extract the host from the base URL (e.g., "staging.wavedash.gg")
+    let host_url = Url::parse(&format!("https://{}", base.trim_start_matches("https://").trim_start_matches("http://")))?;
+    let main_host = host_url.host_str().ok_or_else(|| anyhow::anyhow!("Could not extract host"))?;
+
+    let subdomain = format!("{}-{}.sandbox.{}", wavedash_config.game_slug, timestamp, main_host);
+    let permission_grant_url = format!("https://{}/sandbox/permission-grant", subdomain);
+
+    let mut url = Url::parse(&permission_grant_url)?;
+
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair(UrlParams::REDIRECT_URL, game_url.as_str());
+        pairs.append_pair(UrlParams::LOCAL_ORIGIN, local_origin);
     }
 
     Ok(url)

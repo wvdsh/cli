@@ -155,10 +155,10 @@ fn config_parent_dir(config_path: &PathBuf) -> Result<PathBuf> {
 }
 
 fn build_cors_layer() -> Result<CorsLayer> {
-    let allowed_domains = vec!["wavedash.gg".to_string(), "wavedash.lvh.me".to_string()];
+    let allowed_domains = vec!["wavedash.gg".to_string(), "staging.wavedash.gg".to_string(), "wavedash.lvh.me".to_string()];
     Ok(CorsLayer::new()
         .allow_credentials(true)
-        .allow_methods(AllowMethods::list(vec![Method::GET, Method::HEAD, Method::OPTIONS]))
+        .allow_methods(AllowMethods::list(vec![Method::GET, Method::POST, Method::HEAD, Method::OPTIONS]))
         .allow_headers(AllowHeaders::mirror_request())
         .allow_origin(AllowOrigin::predicate(move |origin, _| {
             origin
@@ -201,6 +201,13 @@ async fn log_and_add_corp_headers(
     response.headers_mut().insert(
         "Cross-Origin-Resource-Policy",
         "cross-origin".parse().unwrap(),
+    );
+
+    // Required for Chrome 142+ Local Network Access when service workers
+    // from public websites (or cross-origin iframes) fetch from localhost
+    response.headers_mut().insert(
+        "Access-Control-Allow-Private-Network",
+        "true".parse().unwrap(),
     );
 
     // Handle compressed files: add Content-Encoding and fix Content-Type
