@@ -86,7 +86,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
         EngineKind::Custom => None,
     };
 
-    let (rustls_config, cert_path, key_path) = load_or_create_certificates().await?;
+    let (rustls_config, cert_path, _key_path) = load_or_create_certificates().await?;
     ensure_cert_trusted(&cert_path)?;
 
     let cors_layer = build_cors_layer()?;
@@ -114,12 +114,14 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
         entrypoint_params.as_ref(),
     )?;
 
-    println!("📦 Serving assets from {}", upload_dir.display());
-    println!("🔐 TLS certificate: {}", cert_path.display());
-    println!("   Key: {}", key_path.display());
-    println!("🌐 Local HTTPS origin: {}", local_origin);
-    println!("▶️ Sandbox link:\n{}", sandbox_url);
-    println!("Press Ctrl+C to stop the server.");
+    println!("--------------------------------");
+    println!("\x1b]8;;{}\x1b\\Sandbox Link\x1b]8;;\x1b\\", sandbox_url);
+    println!("--------------------------------");
+
+    // Open the sandbox URL in the default browser
+    if let Err(e) = open::that(sandbox_url.as_str()) {
+        eprintln!("Failed to open browser: {}", e);
+    }
 
     let handle = Handle::new();
     let shutdown_handle = handle.clone();
@@ -243,8 +245,8 @@ async fn log_and_add_corp_headers(
 }
 
 fn bind_ephemeral_listener() -> Result<(StdTcpListener, SocketAddr)> {
-    let listener = StdTcpListener::bind(("127.0.0.1", 0))
-        .context("Unable to bind to an ephemeral localhost port")?;
+    let listener = StdTcpListener::bind(("127.0.0.1", 7777))
+        .context("Unable to bind to localhost:7777 (port may already be in use)")?;
     let addr = listener
         .local_addr()
         .context("Failed to read bound socket address")?;
