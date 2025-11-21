@@ -1,6 +1,6 @@
 [package]
 name = "wavedash"
-version = "0.1.10"
+version = "0.1.11"
 edition = "2021"
 authors = ["Wavedash Team"]
 description = "Cross-platform CLI tool for uploading game projects to wavedash.gg"
@@ -26,7 +26,8 @@ futures = "0.3"
 # HTTP & Servers
 reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 axum = { version = "0.7", default-features = false, features = ["http1", "tokio"] }
-axum-server = { version = "0.7", features = ["tls-rustls"] }
+axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "fs", "trace"] }
 rcgen = "0.12"
