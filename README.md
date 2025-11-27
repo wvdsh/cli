@@ -18,7 +18,7 @@ wvdsh build push
 ### Dev Sandbox Server
 
 ```bash
-wvdsh dev serve [--config ./wavedash.toml]
+wvdsh dev [--config ./wavedash.toml]
 ```
 
 What it does:
