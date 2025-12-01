@@ -1,4 +1,0 @@
-open_browser_website_host = "https://staging.wavedash.gg"
-api_host = "https://convex-http.staging.wavedash.gg"
-keyring_service = "wvdsh-dev"
-keyring_account = "api-key-dev"

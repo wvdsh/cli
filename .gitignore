@@ -1,5 +1,3 @@
 /target
 test_build
-config.toml
-
 *.code-workspace

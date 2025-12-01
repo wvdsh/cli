@@ -1,3 +1,24 @@
+# Wavedash CLI
+
+Cross-platform CLI tool for uploading game projects to wavedash.gg.
+
+## Installation
+
+### macOS (Homebrew)
+
+```bash
+brew tap wavedash/wvdsh
+brew install wvdsh
+```
+
+### Windows
+
+Download the `.exe` from [Releases](https://github.com/wavedash/cli/releases).
+
+### Linux
+
+Download the binary from [Releases](https://github.com/wavedash/cli/releases).
+
 ## Commands
 
 ### Authentication
@@ -29,6 +50,17 @@ What it does:
 
 Tip: run the command from the repo root so the default `./wavedash.toml` is picked up automatically. Use `--config /path/to/wavedash.toml` only when needed.
 
+## Local Development
+
+```bash
+# Install Doppler for secrets management
+brew install dopplerhq/cli/doppler
+doppler setup
+
+# Run the CLI with secrets injected
+doppler run -- cargo run
+```
+
 ## Wavedash Toml
 
 All configs require these fields:
@@ -41,7 +73,7 @@ Then include exactly one engine section: `[godot]`, `[unity]`, or `[custom]`.
 
 ### Godot `wavedash.toml`
 
-```
+```toml
 org_slug = "franz-labs-inc"
 game_slug = "pgrc"
 branch_slug = "internal-1"
@@ -53,7 +85,7 @@ version = "4.5-stable"
 
 ### Unity `wavedash.toml`
 
-```
+```toml
 org_slug = "franz-labs-inc"
 game_slug = "pgrc"
 branch_slug = "internal-1"
@@ -65,7 +97,7 @@ version = "6000.0.2f1"
 
 ### Custom Engine `wavedash.toml`
 
-```
+```toml
 org_slug = "franz-labs-inc"
 game_slug = "pgrc"
 branch_slug = "internal-1"
@@ -75,6 +107,3 @@ upload_dir = "./builds/webgl"
 version = "0.0.1"
 entrypoint = "x"
 ```
-
-
-
