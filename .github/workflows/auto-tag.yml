@@ -30,6 +30,7 @@ jobs:
         with:
           tag: "${{ steps.get_version.outputs.version }}"
           tag_exists_error: false
+          force_push_tag: true
           message: "Release ${{ steps.get_version.outputs.version }}"
           github_token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
