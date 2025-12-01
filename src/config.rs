@@ -4,42 +4,28 @@ use std::path::PathBuf;
 
 #[derive(Deserialize)]
 struct Config {
-    #[serde(default = "default_website_host", rename = "SITE_HOST")]
     open_browser_website_host: String,
-    #[serde(default = "default_api_host", rename = "CONVEX_HTTP_URL")]
     api_host: String,
-    #[serde(default = "default_keyring_service", rename = "KEYRING_SERVICE")]
     keyring_service: String,
-    #[serde(default = "default_keyring_account", rename = "KEYRING_ACCOUNT")]
     keyring_account: String,
-}
-
-fn default_website_host() -> String {
-    option_env!("SITE_HOST").expect("SITE_HOST not set at compile time").to_string()
-}
-
-fn default_api_host() -> String {
-    option_env!("CONVEX_HTTP_URL").expect("CONVEX_HTTP_URL not set at compile time").to_string()
-}
-
-fn default_keyring_service() -> String {
-    option_env!("KEYRING_SERVICE").expect("KEYRING_SERVICE not set at compile time").to_string()
-}
-
-fn default_keyring_account() -> String {
-    option_env!("KEYRING_ACCOUNT").expect("KEYRING_ACCOUNT not set at compile time").to_string()
 }
 
 impl Config {
     fn load() -> Result<Self> {
-        let mut config: Config = envy::from_env()?;
-
+        // Values are baked in at compile time via build.rs
+        let mut site_host = env!("SITE_HOST").to_string();
+        
         // Ensure protocol is present
-        if !config.open_browser_website_host.starts_with("http") {
-            config.open_browser_website_host = format!("https://{}", config.open_browser_website_host);
+        if !site_host.starts_with("http") {
+            site_host = format!("https://{}", site_host);
         }
 
-        Ok(config)
+        Ok(Config {
+            open_browser_website_host: site_host,
+            api_host: env!("CONVEX_HTTP_URL").to_string(),
+            keyring_service: env!("KEYRING_SERVICE").to_string(),
+            keyring_account: env!("KEYRING_ACCOUNT").to_string(),
+        })
     }
 }
 

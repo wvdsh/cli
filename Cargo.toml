@@ -1,6 +1,6 @@
 [package]
 name = "cli"
-version = "0.1.27"
+version = "0.1.28"
 edition = "2021"
 authors = ["Wavedash Team"]
 description = "Cross-platform CLI tool for uploading game projects to wavedash.gg"
@@ -60,10 +60,12 @@ tiny_http = "0.12"
 open = "5.0"
 url = "2.5"
 urlencoding = "2.1"
-envy = "0.4.2"
 
 
 
+
+[build-dependencies]
+dotenvy = "0.15"
 
 [dev-dependencies]
 

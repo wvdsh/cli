@@ -1,5 +1,7 @@
 - name: Install Doppler CLI
   uses: dopplerhq/cli-action@v3
-- name: Set Doppler Token
-  run: echo "DOPPLER_TOKEN=${{ secrets.DOPPLER_TOKEN }}" >> $GITHUB_ENV
+- name: Generate .env from Doppler secrets
+  run: doppler secrets download --no-file --format env > .env
+  env:
+    DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
 
