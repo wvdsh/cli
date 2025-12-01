@@ -1,11 +1,11 @@
 [package]
 name = "cli"
-version = "0.1.25"
+version = "0.1.26"
 edition = "2021"
 authors = ["Wavedash Team"]
 description = "Cross-platform CLI tool for uploading game projects to wavedash.gg"
 license = "MIT"
-repository = "https://github.com/wavedash/cli"
+repository = "https://github.com/wvdsh/cli"
 homepage = "https://wavedash.gg"
 readme = "README.md"
 keywords = ["cli", "gaming", "upload", "wavedash"]
