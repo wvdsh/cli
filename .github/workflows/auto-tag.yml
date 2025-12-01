@@ -14,6 +14,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
       
       - name: Get version
         id: get_version
@@ -24,21 +26,15 @@ jobs:
           echo "Detected version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Create Tag
-        uses: rickstaa/action-create-tag@v1
-        id: "tag_create"
-        with:
-          tag: "${{ steps.get_version.outputs.version }}"
-          tag_exists_error: false
-          force_push_tag: true
-          message: "Release ${{ steps.get_version.outputs.version }}"
-          github_token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      - name: Create and Push Version Tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.get_version.outputs.version }}" -m "Release ${{ steps.get_version.outputs.version }}" || echo "Tag already exists"
+          git push origin "${{ steps.get_version.outputs.version }}" || echo "Tag already pushed"
 
-      - name: Create Latest Tag
-        uses: rickstaa/action-create-tag@v1
-        with:
-          tag: "latest"
-          force_push_tag: true
-          message: "Latest release"
-          github_token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      - name: Create and Push Latest Tag
+        run: |
+          git tag -f -a "latest" -m "Latest release"
+          git push -f origin "latest"
 
