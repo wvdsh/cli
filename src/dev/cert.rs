@@ -1,11 +1,10 @@
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use axum_server::tls_rustls::RustlsConfig;
 use directories::ProjectDirs;
-use rcgen::{Certificate, CertificateParams, DnType, SanType, PKCS_ECDSA_P256_SHA256};
+use rcgen::generate_simple_self_signed;
 
 const DEV_CERT_SUBDIR: &str = "dev-server";
 const DEV_CERT_NAME: &str = "localhost-cert.pem";
@@ -43,20 +42,11 @@ pub fn ensure_cert_trusted(cert_path: &Path) -> Result<()> {
 }
 
 fn create_self_signed_cert(cert_path: &Path, key_path: &Path) -> Result<()> {
-    let mut params = CertificateParams::default();
-    params
-        .distinguished_name
-        .push(DnType::CommonName, DEV_CERT_COMMON_NAME);
-    params.subject_alt_names = vec![
-        SanType::DnsName("localhost".into()),
-        SanType::IpAddress(IpAddr::V4(Ipv4Addr::LOCALHOST)),
-        SanType::IpAddress(IpAddr::V6(Ipv6Addr::LOCALHOST)),
-    ];
-    params.alg = &PKCS_ECDSA_P256_SHA256;
-
-    let cert = Certificate::from_params(params)?;
-    let cert_pem = cert.serialize_pem()?;
-    let key_pem = cert.serialize_private_key_pem();
+    let subject_alt_names = vec!["localhost".to_string()];
+    let rcgen::CertifiedKey { cert, signing_key } = generate_simple_self_signed(subject_alt_names)?;
+    
+    let cert_pem = cert.pem();
+    let key_pem = signing_key.serialize_pem();
 
     fs::write(cert_path, cert_pem)?;
     fs::write(key_path, key_pem)?;

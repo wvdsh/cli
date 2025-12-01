@@ -24,14 +24,13 @@ tokio = { version = "1.40", features = ["full"] }
 futures = "0.3"
 
 # HTTP & Servers
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls", "http2"] }
-axum = { version = "0.7", default-features = false, features = ["http1", "tokio"] }
+rustls = { version = "0.23", features = ["aws-lc-rs"] }
+reqwest = { version = "0.12", features = ["json", "stream", "multipart", "rustls-tls"] }
+axum = { version = "0.7" }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
-rustls = { version = "0.23", default-features = false, features = ["std", "aws-lc-rs"] }
-aws-lc-rs = "1.0"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "fs", "trace"] }
-rcgen = "0.12"
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "aws_lc_rs"] }
 dialoguer = "0.11"
 
 # Serialization
