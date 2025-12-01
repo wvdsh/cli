@@ -1,0 +1,41 @@
+name: Auto Tag on Version Change
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'Cargo.toml'
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Get version
+        id: get_version
+        run: |
+          # Extract version from Cargo.toml using grep to avoid needing full cargo setup/compilation
+          # Assumes 'version = "x.y.z"' is at the top level [package]
+          VERSION=$(grep '^version =' Cargo.toml | head -n 1 | cut -d '"' -f2)
+          echo "Detected version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create Tag
+        uses: rickstaa/action-create-tag@v1
+        id: "tag_create"
+        with:
+          tag: "${{ steps.get_version.outputs.version }}"
+          tag_exists_error: false
+          message: "Release ${{ steps.get_version.outputs.version }}"
+
+      - name: Create Latest Tag
+        uses: rickstaa/action-create-tag@v1
+        with:
+          tag: "latest"
+          force_push_tag: true
+          message: "Latest release"
+
