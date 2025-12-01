@@ -5,6 +5,8 @@ members = ["cargo:."]
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.30.2"
+# Custom build setup steps
+github-build-setup = "../build-setup.yml"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
