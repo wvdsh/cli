@@ -25,22 +25,19 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Create Tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
-          TAG="${{ steps.get_version.outputs.version }}"
-          
-          # Check if tag already exists remotely
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists. Skipping."
-          else
-            git tag -a "$TAG" -m "Release $TAG"
-            git push origin "$TAG"
-          fi
+        uses: rickstaa/action-create-tag@v1
+        id: "tag_create"
+        with:
+          tag: "v${{ steps.get_version.outputs.version }}"
+          tag_exists_error: false
+          message: "Release v${{ steps.get_version.outputs.version }}"
+          github_token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
       - name: Create Latest Tag
-        run: |
-          git tag -f -a latest -m "Latest release"
-          git push -f origin latest
+        uses: rickstaa/action-create-tag@v1
+        with:
+          tag: "latest"
+          force_push_tag: true
+          message: "Latest release"
+          github_token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
