@@ -33,8 +33,3 @@ jobs:
           git tag -a "${{ steps.get_version.outputs.version }}" -m "Release ${{ steps.get_version.outputs.version }}" || echo "Tag already exists"
           git push origin "${{ steps.get_version.outputs.version }}" || echo "Tag already pushed"
 
-      - name: Create and Push Latest Tag
-        run: |
-          git tag -f -a "latest" -m "Latest release"
-          git push -f origin "latest"
-

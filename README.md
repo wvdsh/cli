@@ -1,1 +1,1 @@
-[coming soon?]
+Download the latest [release](https://github.com/wvdsh/cli/releases)
