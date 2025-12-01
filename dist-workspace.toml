@@ -19,3 +19,5 @@ install-path = "CARGO_HOME"
 publish-jobs = ["homebrew"]
 # Whether to install an updater program
 install-updater = true
+# Custom build command to inject Doppler secrets at compile time
+build-command = ["doppler", "run", "--", "cargo", "build", "--profile=dist"]
