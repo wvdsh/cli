@@ -336,6 +336,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1d728cc89cf3aee9ff92b05e62b19ee65a02b5702cff7d5a377e32c6ae29d8d"
 
 [[package]]
+name = "cli"
+version = "0.1.25"
+dependencies = [
+ "anyhow",
+ "axum",
+ "axum-server",
+ "clap",
+ "dialoguer",
+ "directories",
+ "envy",
+ "futures",
+ "indicatif",
+ "keyring",
+ "mime_guess",
+ "open",
+ "opendal",
+ "rcgen",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tiny_http",
+ "tokio",
+ "toml",
+ "tower 0.4.13",
+ "tower-http 0.5.2",
+ "url",
+ "urlencoding",
+ "walkdir",
+]
+
+[[package]]
 name = "cmake"
 version = "0.1.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2727,38 +2759,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
-]
-
-[[package]]
-name = "wavedash"
-version = "0.1.24"
-dependencies = [
- "anyhow",
- "axum",
- "axum-server",
- "clap",
- "dialoguer",
- "directories",
- "envy",
- "futures",
- "indicatif",
- "keyring",
- "mime_guess",
- "open",
- "opendal",
- "rcgen",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "tiny_http",
- "tokio",
- "toml",
- "tower 0.4.13",
- "tower-http 0.5.2",
- "url",
- "urlencoding",
- "walkdir",
 ]
 
 [[package]]
