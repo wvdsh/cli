@@ -3,6 +3,7 @@ mod builds;
 mod config;
 mod dev;
 mod file_staging;
+mod updater;
 
 use anyhow::Result;
 use auth::{login_with_browser, AuthManager};
@@ -39,6 +40,8 @@ enum Commands {
         )]
         config: Option<PathBuf>,
     },
+    #[command(about = "Check for and install updates")]
+    Update,
 }
 
 #[derive(Subcommand)]
@@ -73,6 +76,9 @@ async fn main() -> Result<()> {
         .expect("Failed to install rustls crypto provider");
     
     let cli = Cli::parse();
+
+    // Check for updates (shows cached from previous run, spawns background check for next)
+    let update_handle = updater::check_for_updates();
 
     match cli.command {
         Commands::Auth { action } => {
@@ -127,7 +133,13 @@ async fn main() -> Result<()> {
         Commands::Dev { config } => {
             handle_dev(config, cli.verbose).await?;
         }
+        Commands::Update => {
+            updater::run_update().await?;
+        }
     }
+
+    // Wait for background update check to complete
+    let _ = update_handle.join();
 
     Ok(())
 }

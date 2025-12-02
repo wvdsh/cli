@@ -1,6 +1,18 @@
 use anyhow::Result;
+use directories::ProjectDirs;
 use serde::Deserialize;
 use std::path::PathBuf;
+
+// Standard project directories configuration
+pub const PROJECT_QUALIFIER: &str = "gg";
+pub const PROJECT_ORGANIZATION: &str = "wavedash";
+pub const PROJECT_APPLICATION: &str = "cli";
+
+/// Get the project directories for this application
+pub fn project_dirs() -> Result<ProjectDirs> {
+    ProjectDirs::from(PROJECT_QUALIFIER, PROJECT_ORGANIZATION, PROJECT_APPLICATION)
+        .ok_or_else(|| anyhow::anyhow!("Could not determine project directories"))
+}
 
 #[derive(Deserialize)]
 struct Config {

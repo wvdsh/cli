@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use axum_server::tls_rustls::RustlsConfig;
-use directories::ProjectDirs;
 use rcgen::generate_simple_self_signed;
+
+use crate::config;
 
 const DEV_CERT_SUBDIR: &str = "dev-server";
 const DEV_CERT_NAME: &str = "localhost-cert.pem";
@@ -15,8 +16,7 @@ const DEV_CERT_COMMON_NAME: &str = "wvdsh dev server";
 const LINUX_CERT_INSTALL_PATH: &str = "/usr/local/share/ca-certificates/wvdsh-dev.crt";
 
 pub async fn load_or_create_certificates() -> Result<(RustlsConfig, PathBuf, PathBuf)> {
-    let project_dirs = ProjectDirs::from("gg", "Wavedash", "wvdsh")
-        .ok_or_else(|| anyhow::anyhow!("Unable to determine config directory for certificates"))?;
+    let project_dirs = config::project_dirs()?;
     let cert_dir = project_dirs.config_dir().join(DEV_CERT_SUBDIR);
     fs::create_dir_all(&cert_dir)?;
 
