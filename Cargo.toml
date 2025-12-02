@@ -1,6 +1,6 @@
 [package]
 name = "cli"
-version = "0.1.30"
+version = "0.1.31"
 edition = "2021"
 authors = ["Wavedash Team"]
 description = "Cross-platform CLI tool for uploading game projects to wavedash.gg"
@@ -62,7 +62,7 @@ url = "2.5"
 urlencoding = "2.1"
 
 # Update checking
-axoupdater = "0.8"
+axoupdater = "0.9"
 semver = "1.0"
 chrono = "0.4"
 

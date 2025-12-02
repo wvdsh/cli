@@ -51,7 +51,7 @@ pub fn check_for_updates() -> std::thread::JoinHandle<()> {
                 if latest > current {
                     println!("\n🎉 Update available → {}", cache.latest_version);
                     match cache.install_method.as_str() {
-                        "homebrew" => println!("Run: brew upgrade wvdsh"),
+                        "homebrew" => println!("Run: brew upgrade wvdsh/tap/cli"),
                         "shell" | "powershell" => println!("Run: wvdsh update"),
                         _ => {}
                     }
@@ -109,10 +109,19 @@ async fn background_update_check() -> Result<()> {
 }
 
 async fn check_homebrew_version() -> Result<Option<String>> {
-    let url = "https://formulae.brew.sh/api/formula/wvdsh.json";
-    let response: serde_json::Value = reqwest::get(url).await?.json().await?;
+    // Use brew info to check version of custom tap formula
+    let output = tokio::process::Command::new("brew")
+        .args(["info", "--json=v2", "wvdsh/tap/cli"])
+        .output()
+        .await?;
     
-    Ok(response["versions"]["stable"]
+    if !output.status.success() {
+        return Ok(None);
+    }
+    
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    
+    Ok(response["formulae"][0]["versions"]["stable"]
         .as_str()
         .map(|s| s.to_string()))
 }
@@ -130,7 +139,7 @@ pub async fn run_update() -> Result<()> {
     // Load receipt - will fail for homebrew/manual installs
     if let Err(_) = updater.load_receipt() {
         if is_homebrew() {
-            anyhow::bail!("Installed via Homebrew. Use: brew upgrade wvdsh");
+            anyhow::bail!("Installed via Homebrew. Use: brew upgrade wvdsh/tap/cli");
         } else {
             anyhow::bail!("No updates available");
         }
