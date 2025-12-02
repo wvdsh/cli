@@ -1,5 +1,5 @@
 [package]
-name = "cli"
+name = "wvdsh"
 version = "0.1.31"
 edition = "2021"
 authors = ["Wavedash Team"]
