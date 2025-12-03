@@ -50,10 +50,11 @@ pub fn check_for_updates() -> std::thread::JoinHandle<()> {
             ) {
                 if latest > current {
                     println!("\n🎉 Update available → {}", cache.latest_version);
-                    match cache.install_method.as_str() {
-                        "homebrew" => println!("Run: brew upgrade wvdsh/tap/cli"),
-                        "shell" | "powershell" => println!("Run: wvdsh update"),
-                        _ => {}
+                    // Always check current install method, don't rely on cached value
+                    if is_homebrew() {
+                        println!("Run: brew upgrade wvdsh/tap/cli");
+                    } else {
+                        println!("Run: wvdsh update");
                     }
                     println!();
                 }
@@ -69,25 +70,7 @@ pub fn check_for_updates() -> std::thread::JoinHandle<()> {
 }
 
 async fn background_update_check() -> Result<()> {
-    // Try axoupdater first (shell/powershell installs)
-    let mut updater = AxoUpdater::new_for(BIN_NAME);
-
-    
-    if updater.load_receipt().is_ok() {
-        // Shell/powershell install
-        if let Some(new_version) = updater.query_new_version().await? {
-            let cache = UpdateCache {
-                latest_version: new_version.to_string(),
-                last_check: chrono::Utc::now().to_rfc3339(),
-                show_notification: true,
-                install_method: "shell".to_string(),
-            };
-            cache.save()?;
-        }
-        return Ok(());
-    }
-
-    // Check if homebrew install
+    // Check Homebrew first (takes priority)
     if is_homebrew() {
         if let Some(version) = check_homebrew_version().await? {
             let current = Version::parse(CURRENT_VERSION)?;
@@ -101,7 +84,33 @@ async fn background_update_check() -> Result<()> {
                     install_method: "homebrew".to_string(),
                 };
                 cache.save()?;
+            } else {
+                // Clear notification if we're up to date
+                let cache = UpdateCache {
+                    latest_version: version,
+                    last_check: chrono::Utc::now().to_rfc3339(),
+                    show_notification: false,
+                    install_method: "homebrew".to_string(),
+                };
+                cache.save()?;
             }
+        }
+        return Ok(());
+    }
+
+    // Try axoupdater for shell/powershell installs
+    let mut updater = AxoUpdater::new_for(BIN_NAME);
+    
+    if updater.load_receipt().is_ok() {
+        // Shell/powershell install
+        if let Some(new_version) = updater.query_new_version().await? {
+            let cache = UpdateCache {
+                latest_version: new_version.to_string(),
+                last_check: chrono::Utc::now().to_rfc3339(),
+                show_notification: true,
+                install_method: "shell".to_string(),
+            };
+            cache.save()?;
         }
     }
 
