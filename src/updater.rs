@@ -52,7 +52,7 @@ pub fn check_for_updates() -> std::thread::JoinHandle<()> {
                     println!("\n🎉 Update available → {}", cache.latest_version);
                     // Always check current install method, don't rely on cached value
                     if is_homebrew() {
-                        println!("Run: brew upgrade wvdsh/tap/cli");
+                        println!("Run: brew upgrade wvdsh/tap/wvdsh");
                     } else {
                         println!("Run: wvdsh update");
                     }
@@ -120,7 +120,7 @@ async fn background_update_check() -> Result<()> {
 async fn check_homebrew_version() -> Result<Option<String>> {
     // Use brew info to check version of custom tap formula
     let output = tokio::process::Command::new("brew")
-        .args(["info", "--json=v2", "wvdsh/tap/cli"])
+        .args(["info", "--json=v2", "wvdsh/tap/wvdsh"])
         .output()
         .await?;
     
@@ -137,21 +137,22 @@ async fn check_homebrew_version() -> Result<Option<String>> {
 
 /// Run updater to install latest version
 pub async fn run_update() -> Result<()> {
+
+    if is_homebrew() {
+        anyhow::bail!("Installed via Homebrew. Use: brew upgrade wvdsh/tap/wvdsh");
+    }
+
     // Mark notification as acknowledged
     if let Some(mut cache) = UpdateCache::load() {
         cache.show_notification = false;
         cache.save()?;
     }
 
-    let mut updater = AxoUpdater::new_for(BIN_NAME);
+    let mut updater: AxoUpdater = AxoUpdater::new_for(BIN_NAME);
     
     // Load receipt - will fail for homebrew/manual installs
     if let Err(_) = updater.load_receipt() {
-        if is_homebrew() {
-            anyhow::bail!("Installed via Homebrew. Use: brew upgrade wvdsh/tap/cli");
-        } else {
-            anyhow::bail!("No updates available");
-        }
+        anyhow::bail!("No updates available");
     }
     
     updater.always_update(true);
