@@ -15,6 +15,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "wvdsh")]
 #[command(about = "Cross-platform CLI tool for uploading game projects to wavedash.gg")]
+#[command(version)]
 struct Cli {
     #[arg(long, global = true, help = "Enable verbose output")]
     verbose: bool,
