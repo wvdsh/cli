@@ -2,7 +2,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
 use walkdir::WalkDir;
@@ -47,7 +46,7 @@ pub async fn fetch_entrypoint_params(engine: &str, html_path: &Path) -> Result<V
         api_host.trim_end_matches('/')
     );
 
-    let client = Client::new();
+    let client = config::create_http_client()?;
     let response = client
         .get(&endpoint)
         .query(&[("engine", engine), ("htmlContent", html_content.as_str())])

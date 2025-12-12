@@ -55,7 +55,7 @@ async fn get_temp_credentials(
     entrypoint: Option<&str>,
     api_key: &str,
 ) -> Result<TempCredsResponse> {
-    let client = reqwest::Client::new();
+    let client = config::create_http_client()?;
     let api_host = config::get("api_host")?;
 
     let url = format!(
@@ -107,7 +107,7 @@ async fn notify_upload_complete(
     build_id: &str,
     api_key: &str,
 ) -> Result<()> {
-    let client = reqwest::Client::new();
+    let client = config::create_http_client()?;
     let api_host = config::get("api_host")?;
 
     let url = format!(

@@ -20,13 +20,15 @@ struct Config {
     api_host: String,
     keyring_service: String,
     keyring_account: String,
+    cf_access_client_id: Option<String>,
+    cf_access_client_secret: Option<String>,
 }
 
 impl Config {
     fn load() -> Result<Self> {
         // Values are baked in at compile time via build.rs
         let mut site_host = env!("SITE_HOST").to_string();
-        
+
         // Ensure protocol is present
         if !site_host.starts_with("http") {
             site_host = format!("https://{}", site_host);
@@ -37,6 +39,8 @@ impl Config {
             api_host: env!("CONVEX_HTTP_URL").to_string(),
             keyring_service: env!("KEYRING_SERVICE").to_string(),
             keyring_account: env!("KEYRING_ACCOUNT").to_string(),
+            cf_access_client_id: option_env!("CF_ACCESS_CLIENT_ID").map(|s| s.to_string()),
+            cf_access_client_secret: option_env!("CF_ACCESS_CLIENT_SECRET").map(|s| s.to_string()),
         })
     }
 }
@@ -62,6 +66,38 @@ pub fn keyring_config() -> Result<KeyringConfig> {
         service: config.keyring_service.clone(),
         account: config.keyring_account.clone(),
     })
+}
+
+/// Create an HTTP client configured with Cloudflare Access headers if needed
+pub fn create_http_client() -> Result<reqwest::Client> {
+    let config = Config::load()?;
+    let mut client_builder = reqwest::Client::builder();
+
+    // Check if we're targeting staging and have CF credentials
+    let api_host = &config.api_host;
+    let needs_cf_headers = api_host
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .ends_with("staging.wavedash.gg");
+
+    if needs_cf_headers {
+        if let (Some(client_id), Some(client_secret)) =
+            (&config.cf_access_client_id, &config.cf_access_client_secret)
+        {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(
+                "CF-Access-Client-Id",
+                reqwest::header::HeaderValue::from_str(client_id)?,
+            );
+            headers.insert(
+                "CF-Access-Client-Secret",
+                reqwest::header::HeaderValue::from_str(client_secret)?,
+            );
+            client_builder = client_builder.default_headers(headers);
+        }
+    }
+
+    Ok(client_builder.build()?)
 }
 
 #[derive(Debug, Deserialize)]
