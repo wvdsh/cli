@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(doppler run:*)",
+      "WebSearch",
+      "Bash(cargo clean:*)",
+      "Bash(cargo tree:*)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:seanmonstar.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(dir:*)"
+    ]
+  }
+}
