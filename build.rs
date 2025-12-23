@@ -3,7 +3,7 @@ fn main() {
     let _ = dotenvy::dotenv();
 
     // Required config vars - must be set either by Doppler or .env
-    let required = ["SITE_HOST", "CONVEX_HTTP_URL", "KEYRING_SERVICE", "KEYRING_ACCOUNT"];
+    let required = ["SITE_HOST", "CONVEX_HTTP_URL"];
 
     for var in required {
         let value = std::env::var(var)

@@ -1,31 +1,63 @@
 use crate::config;
 use anyhow::Result;
-use keyring::Entry;
+use serde::{Deserialize, Serialize};
+use std::fs;
 use std::net::TcpListener;
 use tiny_http::{Header, Response, Server};
 
-pub struct AuthManager {
-    api_key_entry: Entry,
+#[derive(Serialize, Deserialize)]
+struct Credentials {
+    api_key: String,
 }
+
+pub struct AuthManager;
 
 impl AuthManager {
     pub fn new() -> Result<Self> {
-        let keyring = config::keyring_config()?;
-        let api_key_entry = Entry::new(&keyring.service, &keyring.account)?;
-        Ok(Self { api_key_entry })
+        Ok(Self)
     }
 
     pub fn store_api_key(&self, api_key: &str) -> Result<()> {
-        self.api_key_entry.set_password(api_key)?;
+        let path = config::credentials_path()?;
+
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+            }
+        }
+
+        let credentials = Credentials {
+            api_key: api_key.to_string(),
+        };
+        let json = serde_json::to_string(&credentials)?;
+        fs::write(&path, &json)?;
+
+        // Set restrictive permissions on the credentials file
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        }
+
         Ok(())
     }
 
     pub fn get_api_key(&self) -> Option<String> {
-        self.api_key_entry.get_password().ok()
+        let path = config::credentials_path().ok()?;
+        let json = fs::read_to_string(&path).ok()?;
+        let credentials: Credentials = serde_json::from_str(&json).ok()?;
+        Some(credentials.api_key)
     }
 
     pub fn clear_credentials(&self) -> Result<()> {
-        let _ = self.api_key_entry.delete_credential();
+        let path = config::credentials_path()?;
+        if path.exists() {
+            fs::remove_file(&path)?;
+        }
         Ok(())
     }
 

@@ -6,6 +6,8 @@ use anyhow::{Context, Result};
 use axum::{http::{Method, StatusCode}, middleware, routing::{get_service, head}, Router};
 use axum_server::{self, Handle};
 use mime_guess::from_path;
+use supports_hyperlinks::Stream;
+use terminal_link::Link;
 use tokio::signal;
 use tower::ServiceBuilder;
 use tower_http::{
@@ -29,7 +31,7 @@ use sandbox::build_sandbox_url;
 
 const DEFAULT_CONFIG: &str = "./wavedash.toml";
 
-pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<()> {
+pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bool) -> Result<()> {
     // Check authentication
     let auth_manager = AuthManager::new()?;
     let _api_key = auth_manager
@@ -115,12 +117,17 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
     )?;
 
     println!("--------------------------------");
-    println!("\x1b]8;;{}\x1b\\Sandbox Link\x1b]8;;\x1b\\", sandbox_url);
+    if supports_hyperlinks::on(Stream::Stdout) {
+        println!("{}", Link::new("Sandbox Link", sandbox_url.as_str()));
+    } else {
+        println!("Sandbox Link:\n{}", sandbox_url);
+    }
     println!("--------------------------------");
 
-    // Open the sandbox URL in the default browser
-    if let Err(e) = open::that(sandbox_url.as_str()) {
-        eprintln!("Failed to open browser: {}", e);
+    if !no_open {
+        if let Err(e) = open::that(sandbox_url.as_str()) {
+            eprintln!("Failed to open browser: {}", e);
+        }
     }
 
     let handle = Handle::new();

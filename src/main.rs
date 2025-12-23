@@ -40,6 +40,8 @@ enum Commands {
             help = "Path to wavedash.toml config file"
         )]
         config: Option<PathBuf>,
+        #[arg(long = "no-open", help = "Don't open the sandbox URL in the browser")]
+        no_open: bool,
     },
     #[command(about = "Check for and install updates")]
     Update,
@@ -131,8 +133,8 @@ async fn main() -> Result<()> {
                 handle_build_push(config, cli.verbose).await?;
             }
         },
-        Commands::Dev { config } => {
-            handle_dev(config, cli.verbose).await?;
+        Commands::Dev { config, no_open } => {
+            handle_dev(config, cli.verbose, no_open).await?;
         }
         Commands::Update => {
             updater::run_update().await?;

@@ -18,8 +18,6 @@ pub fn project_dirs() -> Result<ProjectDirs> {
 struct Config {
     open_browser_website_host: String,
     api_host: String,
-    keyring_service: String,
-    keyring_account: String,
     cf_access_client_id: Option<String>,
     cf_access_client_secret: Option<String>,
 }
@@ -37,8 +35,6 @@ impl Config {
         Ok(Config {
             open_browser_website_host: site_host,
             api_host: env!("CONVEX_HTTP_URL").to_string(),
-            keyring_service: env!("KEYRING_SERVICE").to_string(),
-            keyring_account: env!("KEYRING_ACCOUNT").to_string(),
             cf_access_client_id: option_env!("CF_ACCESS_CLIENT_ID").map(|s| s.to_string()),
             cf_access_client_secret: option_env!("CF_ACCESS_CLIENT_SECRET").map(|s| s.to_string()),
         })
@@ -54,18 +50,10 @@ pub fn get(key: &str) -> Result<String> {
     }
 }
 
-#[derive(Debug)]
-pub struct KeyringConfig {
-    pub service: String,
-    pub account: String,
-}
-
-pub fn keyring_config() -> Result<KeyringConfig> {
-    let config = Config::load()?;
-    Ok(KeyringConfig {
-        service: config.keyring_service.clone(),
-        account: config.keyring_account.clone(),
-    })
+/// Get the path to the credentials file
+pub fn credentials_path() -> Result<PathBuf> {
+    let dirs = project_dirs()?;
+    Ok(dirs.config_dir().join("credentials.json"))
 }
 
 /// Create an HTTP client configured with Cloudflare Access headers if needed
