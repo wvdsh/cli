@@ -65,9 +65,6 @@ axoupdater = "0.9"
 semver = "1.0"
 chrono = "0.4"
 
-# Terminal hyperlinks
-supports-hyperlinks = "3"
-terminal-link = "0.1"
 
 
 
