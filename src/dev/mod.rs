@@ -6,8 +6,6 @@ use anyhow::{Context, Result};
 use axum::{http::{Method, StatusCode}, middleware, routing::{get_service, head}, Router};
 use axum_server::{self, Handle};
 use mime_guess::from_path;
-use supports_hyperlinks::Stream;
-use terminal_link::Link;
 use tokio::signal;
 use tower::ServiceBuilder;
 use tower_http::{
@@ -117,11 +115,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
     )?;
 
     println!("--------------------------------");
-    if supports_hyperlinks::on(Stream::Stdout) {
-        println!("{}", Link::new("Sandbox Link", sandbox_url.as_str()));
-    } else {
-        println!("Sandbox Link:\n{}", sandbox_url);
-    }
+    println!("Sandbox Link:\n{}", sandbox_url);
     println!("--------------------------------");
 
     if !no_open {
