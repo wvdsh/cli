@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "wvdsh")]
-#[command(about = "Cross-platform CLI tool for uploading game projects to wavedash.gg")]
+#[command(about = "Cross-platform CLI tool for uploading game projects to wavedash.com")]
 #[command(version)]
 struct Cli {
     #[arg(long, global = true, help = "Enable verbose output")]
@@ -70,14 +70,13 @@ enum BuildCommands {
     },
 }
 
-
 #[tokio::main]
 async fn main() -> Result<()> {
     // Install rustls crypto provider for TLS
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install rustls crypto provider");
-    
+
     let cli = Cli::parse();
 
     // Check for updates (shows cached from previous run, spawns background check for next)

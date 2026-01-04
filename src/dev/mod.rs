@@ -3,7 +3,12 @@ use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use axum::{http::{Method, StatusCode}, middleware, routing::{get_service, head}, Router};
+use axum::{
+    http::{Method, StatusCode},
+    middleware,
+    routing::{get_service, head},
+    Router,
+};
 use axum_server::{self, Handle};
 use mime_guess::from_path;
 use tokio::signal;
@@ -158,10 +163,19 @@ fn config_parent_dir(config_path: &PathBuf) -> Result<PathBuf> {
 }
 
 fn build_cors_layer() -> Result<CorsLayer> {
-    let allowed_domains = vec!["wavedash.gg".to_string(), "staging.wavedash.gg".to_string(), "wavedash.lvh.me".to_string()];
+    let allowed_domains = vec![
+        "wavedash.com".to_string(),
+        "staging.wavedash.gg".to_string(),
+        "wavedash.lvh.me".to_string(),
+    ];
     Ok(CorsLayer::new()
         .allow_credentials(true)
-        .allow_methods(AllowMethods::list(vec![Method::GET, Method::POST, Method::HEAD, Method::OPTIONS]))
+        .allow_methods(AllowMethods::list(vec![
+            Method::GET,
+            Method::POST,
+            Method::HEAD,
+            Method::OPTIONS,
+        ]))
         .allow_headers(AllowHeaders::mirror_request())
         .allow_origin(AllowOrigin::predicate(move |origin, _| {
             origin
@@ -219,10 +233,9 @@ async fn log_and_add_corp_headers(
     for (suffix, encoding) in compression_map {
         if path.ends_with(suffix) {
             // Add Content-Encoding header
-            response.headers_mut().insert(
-                "Content-Encoding",
-                encoding.parse().unwrap(),
-            );
+            response
+                .headers_mut()
+                .insert("Content-Encoding", encoding.parse().unwrap());
 
             // Fix Content-Type based on the actual file type (without compression extension)
             if let Some(stripped_path) = path.strip_suffix(suffix) {
@@ -233,10 +246,9 @@ async fn log_and_add_corp_headers(
                     .map(|m| m.to_string())
                     .unwrap_or_else(|| "application/octet-stream".to_string());
 
-                response.headers_mut().insert(
-                    "Content-Type",
-                    mime_type.parse().unwrap(),
-                );
+                response
+                    .headers_mut()
+                    .insert("Content-Type", mime_type.parse().unwrap());
             }
             break;
         }

@@ -1,12 +1,12 @@
 [package]
 name = "wvdsh"
-version = "0.1.42"
+version = "0.1.43"
 edition = "2021"
 authors = ["Wavedash Team"]
-description = "Cross-platform CLI tool for uploading game projects to wavedash.gg"
+description = "Cross-platform CLI tool for uploading game projects to wavedash.com"
 license = "MIT"
 repository = "https://github.com/wvdsh/cli"
-homepage = "https://wavedash.gg"
+homepage = "https://wavedash.com"
 readme = "README.md"
 keywords = ["cli", "gaming", "upload", "wavedash"]
 categories = ["command-line-utilities", "games"]
