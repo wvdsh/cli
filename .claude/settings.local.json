@@ -10,7 +10,8 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:crates.io)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(cargo check:*)"
     ]
   }
 }

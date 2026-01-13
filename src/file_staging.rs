@@ -21,6 +21,11 @@ impl FileStaging {
         let config_dest = {
             let dest = upload_dir.join("wavedash.toml");
             if config_path.canonicalize()? != dest.canonicalize().unwrap_or_default() {
+                // Remove existing file first to avoid "Access denied" on Windows
+                // when the file is locked or read-only
+                if dest.exists() {
+                    let _ = std::fs::remove_file(&dest);
+                }
                 std::fs::copy(config_path, &dest)
                     .map_err(|e| anyhow::anyhow!("Failed to copy config to upload dir: {}", e))?;
                 Some(dest)
@@ -36,6 +41,10 @@ impl FileStaging {
             let dest = upload_dir.join(entrypoint_str);
             
             if source.canonicalize()? != dest.canonicalize().unwrap_or_default() {
+                // Remove existing file first to avoid "Access denied" on Windows
+                if dest.exists() {
+                    let _ = std::fs::remove_file(&dest);
+                }
                 std::fs::copy(&source, &dest)
                     .map_err(|e| anyhow::anyhow!("Failed to copy entrypoint to upload dir: {}", e))?;
                 Some(dest)
