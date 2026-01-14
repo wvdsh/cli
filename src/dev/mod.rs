@@ -258,8 +258,8 @@ async fn log_and_add_corp_headers(
 }
 
 fn bind_ephemeral_listener() -> Result<(StdTcpListener, SocketAddr)> {
-    let listener = StdTcpListener::bind(("127.0.0.1", 7777))
-        .context("Unable to bind to localhost:7777 (port may already be in use)")?;
+    let listener = StdTcpListener::bind(("127.0.0.1", 0))
+        .context("Unable to bind to localhost")?;
     let addr = listener
         .local_addr()
         .context("Failed to read bound socket address")?;

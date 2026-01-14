@@ -11,7 +11,9 @@
       "WebFetch(domain:crates.io)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(dir:*)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfix: use ephemeral port for dev server to avoid Hyper-V conflicts\n\nPort 7777 falls within Windows'' excluded port range \\(7747-7846\\) reserved\nby Hyper-V/WSL2/Docker, causing \"os error 10013\" on many Windows machines.\nNow lets the OS pick an available port automatically.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   }
 }
