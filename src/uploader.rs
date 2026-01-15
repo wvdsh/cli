@@ -27,7 +27,6 @@ pub struct R2Config {
 struct ManifestEntry {
     path: PathBuf,
     key: String,
-    size: u64,
 }
 
 pub struct R2Uploader {
@@ -104,18 +103,7 @@ impl R2Uploader {
             let uploaded_bytes = uploaded_bytes.clone();
 
             async move {
-                upload_file(&operator, &entry).await?;
-
-                let new_total =
-                    uploaded_bytes.fetch_add(entry.size, Ordering::Relaxed) + entry.size;
-                let clamped = new_total.min(total_bytes);
-                pb.set_position(clamped);
-                pb.set_message(format!(
-                    "{} / {}",
-                    format_bytes(clamped),
-                    format_bytes(total_bytes)
-                ));
-
+                upload_file(&operator, &entry, &pb, &uploaded_bytes, total_bytes).await?;
                 Ok::<(), anyhow::Error>(())
             }
         }))
@@ -148,14 +136,14 @@ fn build_manifest(source_dir: &Path, prefix: &str) -> Result<(Vec<ManifestEntry>
         let metadata = path
             .metadata()
             .with_context(|| format!("Failed to read metadata for {}", path.display()))?;
-        let size = metadata.len();
+        let file_size = metadata.len();
         let relative = path
             .strip_prefix(source_dir)
             .with_context(|| format!("Failed to calculate relative path for {}", path.display()))?;
         let key = build_object_key(prefix, relative);
 
-        entries.push(ManifestEntry { path, key, size });
-        total_bytes = total_bytes.saturating_add(size);
+        entries.push(ManifestEntry { path, key });
+        total_bytes = total_bytes.saturating_add(file_size);
     }
 
     Ok((entries, total_bytes))
@@ -179,7 +167,13 @@ fn build_object_key(prefix: &str, relative: &Path) -> String {
     }
 }
 
-async fn upload_file(operator: &Operator, entry: &ManifestEntry) -> Result<()> {
+async fn upload_file(
+    operator: &Operator,
+    entry: &ManifestEntry,
+    pb: &ProgressBar,
+    uploaded_bytes: &Arc<AtomicU64>,
+    total_bytes: u64,
+) -> Result<()> {
     let mut reader = File::open(&entry.path)
         .await
         .with_context(|| format!("Failed to open {}", entry.path.display()))?;
@@ -203,6 +197,17 @@ async fn upload_file(operator: &Operator, entry: &ManifestEntry) -> Result<()> {
             .write(buffer[..bytes_read].to_vec())
             .await
             .with_context(|| format!("Failed to write {}", entry.key))?;
+
+        // Update progress after each chunk is written
+        let new_total =
+            uploaded_bytes.fetch_add(bytes_read as u64, Ordering::Relaxed) + bytes_read as u64;
+        let clamped = new_total.min(total_bytes);
+        pb.set_position(clamped);
+        pb.set_message(format!(
+            "{} / {}",
+            format_bytes(clamped),
+            format_bytes(total_bytes)
+        ));
     }
 
     writer
