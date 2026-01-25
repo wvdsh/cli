@@ -12,6 +12,14 @@ use clap::{Parser, Subcommand};
 use dev::handle_dev;
 use std::path::PathBuf;
 
+fn mask_token(token: &str) -> String {
+    if token.len() > 10 {
+        format!("{}...{}", &token[..6], &token[token.len() - 3..])
+    } else {
+        "***".to_string()
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "wvdsh")]
 #[command(about = "Cross-platform CLI tool for uploading game projects to wavedash.com")]
@@ -111,27 +119,18 @@ async fn main() -> Result<()> {
                     println!("✓ Successfully logged out");
                 }
                 AuthCommands::Status => {
-                    match auth_manager.get_auth_source() {
+                    let auth_info = auth_manager.get_auth_info();
+                    match auth_info.source {
                         AuthSource::Environment => {
                             println!("✓ Authenticated (via WVDSH_TOKEN environment variable)");
-                            if let Some(api_key) = auth_manager.get_api_key() {
-                                let preview = if api_key.len() > 10 {
-                                    format!("{}...{}", &api_key[..6], &api_key[api_key.len() - 3..])
-                                } else {
-                                    "***".to_string()
-                                };
-                                println!("Token: {}", preview);
+                            if let Some(api_key) = auth_info.api_key {
+                                println!("Token: {}", mask_token(&api_key));
                             }
                         }
                         AuthSource::File => {
                             println!("✓ Authenticated (via stored credentials)");
-                            if let Some(api_key) = auth_manager.get_api_key() {
-                                let preview = if api_key.len() > 10 {
-                                    format!("{}...{}", &api_key[..6], &api_key[api_key.len() - 3..])
-                                } else {
-                                    "***".to_string()
-                                };
-                                println!("API Key: {}", preview);
+                            if let Some(api_key) = auth_info.api_key {
+                                println!("API Key: {}", mask_token(&api_key));
                             }
                         }
                         AuthSource::None => {
