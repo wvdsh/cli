@@ -6,11 +6,19 @@ mod file_staging;
 mod updater;
 
 use anyhow::Result;
-use auth::{login_with_browser, AuthManager};
+use auth::{login_with_browser, AuthManager, AuthSource};
 use builds::handle_build_push;
 use clap::{Parser, Subcommand};
 use dev::handle_dev;
 use std::path::PathBuf;
+
+fn mask_token(token: &str) -> String {
+    if token.len() > 10 {
+        format!("{}...{}", &token[..6], &token[token.len() - 3..])
+    } else {
+        "***".to_string()
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "wvdsh")]
@@ -111,18 +119,23 @@ async fn main() -> Result<()> {
                     println!("✓ Successfully logged out");
                 }
                 AuthCommands::Status => {
-                    if auth_manager.is_authenticated() {
-                        println!("✓ Authenticated");
-                        if let Some(api_key) = auth_manager.get_api_key() {
-                            let preview = if api_key.len() > 10 {
-                                format!("{}...{}", &api_key[..6], &api_key[api_key.len() - 3..])
-                            } else {
-                                "***".to_string()
-                            };
-                            println!("API Key: {}", preview);
+                    let auth_info = auth_manager.get_auth_info();
+                    match auth_info.source {
+                        AuthSource::Environment => {
+                            println!("✓ Authenticated (via WVDSH_TOKEN environment variable)");
+                            if let Some(api_key) = auth_info.api_key {
+                                println!("Token: {}", mask_token(&api_key));
+                            }
                         }
-                    } else {
-                        println!("Not authenticated. Run 'wvdsh auth login' to get started.");
+                        AuthSource::File => {
+                            println!("✓ Authenticated (via stored credentials)");
+                            if let Some(api_key) = auth_info.api_key {
+                                println!("API Key: {}", mask_token(&api_key));
+                            }
+                        }
+                        AuthSource::None => {
+                            println!("Not authenticated. Run 'wvdsh auth login' or set WVDSH_TOKEN environment variable.");
+                        }
                     }
                 }
             }
