@@ -19,9 +19,8 @@ struct UpdateCache {
 
 impl UpdateCache {
     fn cache_path() -> Result<PathBuf> {
-        let project_dirs = config::project_dirs()?;
-        let cache_dir = project_dirs.config_dir();
-        fs::create_dir_all(cache_dir)?;
+        let cache_dir = config::wvdsh_dir()?;
+        fs::create_dir_all(&cache_dir)?;
         Ok(cache_dir.join("update-cache.json"))
     }
 

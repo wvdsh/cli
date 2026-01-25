@@ -6,7 +6,7 @@ mod file_staging;
 mod updater;
 
 use anyhow::Result;
-use auth::{login_with_browser, AuthManager};
+use auth::{login_with_browser, AuthManager, AuthSource};
 use builds::handle_build_push;
 use clap::{Parser, Subcommand};
 use dev::handle_dev;
@@ -111,18 +111,32 @@ async fn main() -> Result<()> {
                     println!("✓ Successfully logged out");
                 }
                 AuthCommands::Status => {
-                    if auth_manager.is_authenticated() {
-                        println!("✓ Authenticated");
-                        if let Some(api_key) = auth_manager.get_api_key() {
-                            let preview = if api_key.len() > 10 {
-                                format!("{}...{}", &api_key[..6], &api_key[api_key.len() - 3..])
-                            } else {
-                                "***".to_string()
-                            };
-                            println!("API Key: {}", preview);
+                    match auth_manager.get_auth_source() {
+                        AuthSource::Environment => {
+                            println!("✓ Authenticated (via WVDSH_TOKEN environment variable)");
+                            if let Some(api_key) = auth_manager.get_api_key() {
+                                let preview = if api_key.len() > 10 {
+                                    format!("{}...{}", &api_key[..6], &api_key[api_key.len() - 3..])
+                                } else {
+                                    "***".to_string()
+                                };
+                                println!("Token: {}", preview);
+                            }
                         }
-                    } else {
-                        println!("Not authenticated. Run 'wvdsh auth login' to get started.");
+                        AuthSource::File => {
+                            println!("✓ Authenticated (via stored credentials)");
+                            if let Some(api_key) = auth_manager.get_api_key() {
+                                let preview = if api_key.len() > 10 {
+                                    format!("{}...{}", &api_key[..6], &api_key[api_key.len() - 3..])
+                                } else {
+                                    "***".to_string()
+                                };
+                                println!("API Key: {}", preview);
+                            }
+                        }
+                        AuthSource::None => {
+                            println!("Not authenticated. Run 'wvdsh auth login' or set WVDSH_TOKEN environment variable.");
+                        }
                     }
                 }
             }

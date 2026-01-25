@@ -16,8 +16,7 @@ const DEV_CERT_COMMON_NAME: &str = "wvdsh dev server";
 const LINUX_CERT_INSTALL_PATH: &str = "/usr/local/share/ca-certificates/wvdsh-dev.crt";
 
 pub async fn load_or_create_certificates() -> Result<(RustlsConfig, PathBuf, PathBuf)> {
-    let project_dirs = config::project_dirs()?;
-    let cert_dir = project_dirs.config_dir().join(DEV_CERT_SUBDIR);
+    let cert_dir = config::wvdsh_dir()?.join(DEV_CERT_SUBDIR);
     fs::create_dir_all(&cert_dir)?;
 
     let cert_path = cert_dir.join(DEV_CERT_NAME);

@@ -10,6 +10,12 @@ struct Credentials {
     api_key: String,
 }
 
+pub enum AuthSource {
+    Environment,
+    File,
+    None,
+}
+
 pub struct AuthManager;
 
 impl AuthManager {
@@ -47,10 +53,36 @@ impl AuthManager {
     }
 
     pub fn get_api_key(&self) -> Option<String> {
+        // First check environment variable (for CI)
+        if let Ok(api_key) = std::env::var("WVDSH_TOKEN") {
+            if !api_key.is_empty() {
+                return Some(api_key);
+            }
+        }
+
+        // Fall back to file-based credentials
         let path = config::credentials_path().ok()?;
         let json = fs::read_to_string(&path).ok()?;
         let credentials: Credentials = serde_json::from_str(&json).ok()?;
         Some(credentials.api_key)
+    }
+
+    pub fn get_auth_source(&self) -> AuthSource {
+        if std::env::var("WVDSH_TOKEN")
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
+        {
+            AuthSource::Environment
+        } else if config::credentials_path()
+            .ok()
+            .and_then(|p| fs::read_to_string(p).ok())
+            .and_then(|json| serde_json::from_str::<Credentials>(&json).ok())
+            .is_some()
+        {
+            AuthSource::File
+        } else {
+            AuthSource::None
+        }
     }
 
     pub fn clear_credentials(&self) -> Result<()> {
@@ -59,10 +91,6 @@ impl AuthManager {
             fs::remove_file(&path)?;
         }
         Ok(())
-    }
-
-    pub fn is_authenticated(&self) -> bool {
-        self.get_api_key().is_some()
     }
 }
 

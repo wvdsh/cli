@@ -1,17 +1,13 @@
 use anyhow::Result;
-use directories::ProjectDirs;
+use directories::BaseDirs;
 use serde::Deserialize;
 use std::path::PathBuf;
 
-// Standard project directories configuration
-pub const PROJECT_QUALIFIER: &str = "gg";
-pub const PROJECT_ORGANIZATION: &str = "wavedash";
-pub const PROJECT_APPLICATION: &str = "cli";
-
-/// Get the project directories for this application
-pub fn project_dirs() -> Result<ProjectDirs> {
-    ProjectDirs::from(PROJECT_QUALIFIER, PROJECT_ORGANIZATION, PROJECT_APPLICATION)
-        .ok_or_else(|| anyhow::anyhow!("Could not determine project directories"))
+/// Get the wvdsh config directory (~/.wvdsh)
+pub fn wvdsh_dir() -> Result<PathBuf> {
+    let base_dirs = BaseDirs::new()
+        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+    Ok(base_dirs.home_dir().join(".wvdsh"))
 }
 
 #[derive(Deserialize)]
@@ -52,8 +48,7 @@ pub fn get(key: &str) -> Result<String> {
 
 /// Get the path to the credentials file
 pub fn credentials_path() -> Result<PathBuf> {
-    let dirs = project_dirs()?;
-    Ok(dirs.config_dir().join("credentials.json"))
+    Ok(wvdsh_dir()?.join("credentials.json"))
 }
 
 /// Create an HTTP client configured with Cloudflare Access headers if needed
