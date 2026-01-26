@@ -97,14 +97,14 @@ async fn main() -> Result<()> {
             match action {
                 AuthCommands::Login { token } => {
                     if let Some(api_key) = token {
-                        // Manual token input
-                        auth_manager.store_api_key(&api_key)?;
+                        // Manual token input (no email available)
+                        auth_manager.store_credentials(&api_key, None)?;
                         println!("✓ Successfully stored API key");
                     } else {
                         // Browser-based login
                         match login_with_browser() {
-                            Ok(api_key) => {
-                                auth_manager.store_api_key(&api_key)?;
+                            Ok(result) => {
+                                auth_manager.store_credentials(&result.api_key, result.email.as_deref())?;
                                 println!("✓ Successfully authenticated!");
                             }
                             Err(e) => {
@@ -129,6 +129,9 @@ async fn main() -> Result<()> {
                         }
                         AuthSource::File => {
                             println!("✓ Authenticated (via stored credentials)");
+                            if let Some(email) = auth_info.email {
+                                println!("Email: {}", email);
+                            }
                             if let Some(api_key) = auth_info.api_key {
                                 println!("API Key: {}", mask_token(&api_key));
                             }

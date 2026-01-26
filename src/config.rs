@@ -3,11 +3,14 @@ use directories::BaseDirs;
 use serde::Deserialize;
 use std::path::PathBuf;
 
-/// Get the wvdsh config directory (~/.wvdsh)
+/// Get the wvdsh config directory (varies by environment)
+/// - Production: ~/.wvdsh
+/// - Staging: ~/.wvdsh-stg
+/// - Dev: ~/.wvdsh-dev
 pub fn wvdsh_dir() -> Result<PathBuf> {
     let base_dirs = BaseDirs::new()
         .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
-    Ok(base_dirs.home_dir().join(".wvdsh"))
+    Ok(base_dirs.home_dir().join(env!("CONFIG_DIR")))
 }
 
 #[derive(Deserialize)]

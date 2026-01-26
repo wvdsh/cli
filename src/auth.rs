@@ -8,6 +8,8 @@ use tiny_http::{Header, Response, Server};
 #[derive(Serialize, Deserialize)]
 struct Credentials {
     api_key: String,
+    #[serde(default)]
+    email: Option<String>,
 }
 
 pub enum AuthSource {
@@ -19,6 +21,12 @@ pub enum AuthSource {
 pub struct AuthInfo {
     pub source: AuthSource,
     pub api_key: Option<String>,
+    pub email: Option<String>,
+}
+
+pub struct LoginResult {
+    pub api_key: String,
+    pub email: Option<String>,
 }
 
 pub struct AuthManager;
@@ -28,7 +36,7 @@ impl AuthManager {
         Ok(Self)
     }
 
-    pub fn store_api_key(&self, api_key: &str) -> Result<()> {
+    pub fn store_credentials(&self, api_key: &str, email: Option<&str>) -> Result<()> {
         let path = config::credentials_path()?;
 
         // Create parent directory if it doesn't exist
@@ -43,6 +51,7 @@ impl AuthManager {
 
         let credentials = Credentials {
             api_key: api_key.to_string(),
+            email: email.map(|s| s.to_string()),
         };
         let json = serde_json::to_string(&credentials)?;
         fs::write(&path, &json)?;
@@ -57,11 +66,10 @@ impl AuthManager {
         Ok(())
     }
 
-    fn read_file_credentials(&self) -> Option<String> {
+    fn read_file_credentials(&self) -> Option<Credentials> {
         let path = config::credentials_path().ok()?;
         let json = fs::read_to_string(&path).ok()?;
-        let credentials: Credentials = serde_json::from_str(&json).ok()?;
-        Some(credentials.api_key)
+        serde_json::from_str(&json).ok()
     }
 
     pub fn get_auth_info(&self) -> AuthInfo {
@@ -71,21 +79,24 @@ impl AuthManager {
                 return AuthInfo {
                     source: AuthSource::Environment,
                     api_key: Some(api_key),
+                    email: None, // No email available from env var
                 };
             }
         }
 
         // Check file
-        if let Some(api_key) = self.read_file_credentials() {
+        if let Some(creds) = self.read_file_credentials() {
             return AuthInfo {
                 source: AuthSource::File,
-                api_key: Some(api_key),
+                api_key: Some(creds.api_key),
+                email: creds.email,
             };
         }
 
         AuthInfo {
             source: AuthSource::None,
             api_key: None,
+            email: None,
         }
     }
 
@@ -116,7 +127,7 @@ fn generate_state() -> String {
         .to_string()
 }
 
-pub fn login_with_browser() -> Result<String> {
+pub fn login_with_browser() -> Result<LoginResult> {
     let port = find_available_port()?;
     let state = generate_state();
     let redirect_uri = format!("http://localhost:{}", port);
@@ -161,6 +172,13 @@ pub fn login_with_browser() -> Result<String> {
                 let decoded_return_url = urlencoding::decode(return_url)
                     .unwrap_or(std::borrow::Cow::Borrowed(return_url));
 
+                // Extract email if provided
+                let email = params.get("email").map(|e| {
+                    urlencoding::decode(e)
+                        .unwrap_or(std::borrow::Cow::Borrowed(e))
+                        .to_string()
+                });
+
                 // Add success param to return URL
                 let redirect_url = if decoded_return_url.contains('?') {
                     format!("{}&success=true", decoded_return_url)
@@ -173,7 +191,10 @@ pub fn login_with_browser() -> Result<String> {
                     .with_status_code(302)
                     .with_header(location_header);
                 let _ = request.respond(response);
-                return Ok(api_key.to_string());
+                return Ok(LoginResult {
+                    api_key: api_key.to_string(),
+                    email,
+                });
             }
         }
     }

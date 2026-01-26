@@ -11,6 +11,17 @@ fn main() {
         println!("cargo:rustc-env={}={}", var, value);
     }
 
+    // Set CONFIG_DIR based on SITE_HOST
+    let site_host = std::env::var("SITE_HOST").unwrap_or_default();
+    let config_dir = if site_host.contains("localhost") || site_host.contains("lvh.me") {
+        ".wvdsh-dev"
+    } else if site_host.contains("staging") {
+        ".wvdsh-stg"
+    } else {
+        ".wvdsh"
+    };
+    println!("cargo:rustc-env=CONFIG_DIR={}", config_dir);
+
     // Optional Cloudflare Access credentials (only needed for staging)
     let optional = ["CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"];
 
