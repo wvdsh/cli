@@ -10,7 +10,9 @@
       "Bash(gh api:*)",
       "Bash(while read id)",
       "Bash(do gh api -X DELETE \"repos/wvdsh/docs/rulesets/$id\")",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(wvdsh:*)",
+      "Bash(brew info:*)"
     ]
   }
 }

@@ -15,6 +15,8 @@ struct UpdateCache {
     last_check: String,
     show_notification: bool,
     install_method: String,
+    #[serde(default)]
+    check_count: u32,
 }
 
 impl UpdateCache {
@@ -71,43 +73,47 @@ pub fn check_for_updates() -> std::thread::JoinHandle<()> {
 async fn background_update_check() -> Result<()> {
     // Check Homebrew first (takes priority)
     if is_homebrew() {
-        if let Some(version) = check_homebrew_version().await? {
+        // Get current check count and increment
+        let check_count = UpdateCache::load()
+            .map(|c| c.check_count)
+            .unwrap_or(0) + 1;
+
+        // Pull tap every 3 checks to get fresh version info
+        if check_count % 3 == 1 {
+            let _ = pull_homebrew_tap().await;
+        }
+
+        if let Some((version, count)) = check_homebrew_version(check_count).await? {
             let current = Version::parse(CURRENT_VERSION)?;
             let latest = Version::parse(&version)?;
-            
-            if latest > current {
-                let cache = UpdateCache {
-                    latest_version: version,
-                    last_check: chrono::Utc::now().to_rfc3339(),
-                    show_notification: true,
-                    install_method: "homebrew".to_string(),
-                };
-                cache.save()?;
-            } else {
-                // Clear notification if we're up to date
-                let cache = UpdateCache {
-                    latest_version: version,
-                    last_check: chrono::Utc::now().to_rfc3339(),
-                    show_notification: false,
-                    install_method: "homebrew".to_string(),
-                };
-                cache.save()?;
-            }
+
+            let cache = UpdateCache {
+                latest_version: version,
+                last_check: chrono::Utc::now().to_rfc3339(),
+                show_notification: latest > current,
+                install_method: "homebrew".to_string(),
+                check_count: count,
+            };
+            cache.save()?;
         }
         return Ok(());
     }
 
     // Try axoupdater for shell/powershell installs
     let mut updater = AxoUpdater::new_for(BIN_NAME);
-    
+
     if updater.load_receipt().is_ok() {
         // Shell/powershell install
         if let Some(new_version) = updater.query_new_version().await? {
+            let check_count = UpdateCache::load()
+                .map(|c| c.check_count)
+                .unwrap_or(0) + 1;
             let cache = UpdateCache {
                 latest_version: new_version.to_string(),
                 last_check: chrono::Utc::now().to_rfc3339(),
                 show_notification: true,
                 install_method: "shell".to_string(),
+                check_count,
             };
             cache.save()?;
         }
@@ -116,22 +122,44 @@ async fn background_update_check() -> Result<()> {
     Ok(())
 }
 
-async fn check_homebrew_version() -> Result<Option<String>> {
+async fn pull_homebrew_tap() -> Result<()> {
+    // Get the tap repo path
+    let repo_output = tokio::process::Command::new("brew")
+        .args(["--repo", "wvdsh/homebrew-tap"])
+        .output()
+        .await?;
+
+    if !repo_output.status.success() {
+        return Ok(());
+    }
+
+    let repo_path = String::from_utf8_lossy(&repo_output.stdout).trim().to_string();
+
+    // Git pull to refresh
+    tokio::process::Command::new("git")
+        .args(["-C", &repo_path, "pull", "--quiet"])
+        .output()
+        .await?;
+
+    Ok(())
+}
+
+async fn check_homebrew_version(check_count: u32) -> Result<Option<(String, u32)>> {
     // Use brew info to check version of custom tap formula
     let output = tokio::process::Command::new("brew")
         .args(["info", "--json=v2", "wvdsh/tap/wvdsh"])
         .output()
         .await?;
-    
+
     if !output.status.success() {
         return Ok(None);
     }
-    
+
     let response: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    
+
     Ok(response["formulae"][0]["versions"]["stable"]
         .as_str()
-        .map(|s| s.to_string()))
+        .map(|s| (s.to_string(), check_count)))
 }
 
 /// Run updater to install latest version
