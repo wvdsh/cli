@@ -102,11 +102,36 @@ pub struct CustomSection {
     pub entrypoint: String,
 }
 
+/// The cloud environment for the game build
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Environment {
+    Production,
+    Demo,
+    Sandbox,
+}
+
+impl Environment {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Environment::Production => "production",
+            Environment::Demo => "demo",
+            Environment::Sandbox => "sandbox",
+        }
+    }
+}
+
+impl std::fmt::Display for Environment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct WavedashConfig {
-    pub org_slug: String,
-    pub game_slug: String,
-    pub branch_slug: String,
+    pub org: String,
+    pub game: String,
+    pub environment: Environment,
     pub upload_dir: PathBuf,
 
     #[serde(rename = "godot")]
