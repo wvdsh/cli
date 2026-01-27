@@ -111,6 +111,36 @@ pub enum Environment {
     Sandbox,
 }
 
+/// Custom deserializer that handles both new environment values and legacy branch_slug values
+fn deserialize_environment<'de, D>(deserializer: D) -> Result<Environment, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+
+    // Try direct environment values first
+    match s.as_str() {
+        "production" => return Ok(Environment::Production),
+        "demo" => return Ok(Environment::Demo),
+        "sandbox" => return Ok(Environment::Sandbox),
+        _ => {}
+    }
+
+    // Legacy branch_slug mapping
+    if s.starts_with("internal") {
+        Ok(Environment::Sandbox)
+    } else if s.starts_with("production") {
+        Ok(Environment::Production)
+    } else if s.starts_with("demo") {
+        Ok(Environment::Demo)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "Invalid environment '{}'. Expected: production, demo, sandbox (or legacy: internal-*, production-*, demo-*)",
+            s
+        )))
+    }
+}
+
 impl Environment {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -129,9 +159,19 @@ impl std::fmt::Display for Environment {
 
 #[derive(Debug, Deserialize)]
 pub struct WavedashConfig {
+    /// Organization slug (supports legacy "org_slug" field)
+    #[serde(alias = "org_slug")]
     pub org: String,
+
+    /// Game slug (supports legacy "game_slug" field)
+    #[serde(alias = "game_slug")]
     pub game: String,
+
+    /// Environment (supports legacy "branch_slug" field for backwards compatibility)
+    /// Old branch_slug values are mapped: "internal-*" -> sandbox, "production-*" -> production, "demo-*" -> demo
+    #[serde(alias = "branch_slug", deserialize_with = "deserialize_environment")]
     pub environment: Environment,
+
     pub upload_dir: PathBuf,
 
     #[serde(rename = "godot")]
@@ -178,6 +218,23 @@ impl WavedashConfig {
                 e
             )
         })?;
+
+        // Check for deprecated field names and warn users
+        let raw_toml: toml::Value = toml::from_str(&config_content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse config file: {}", e))?;
+
+        if let Some(table) = raw_toml.as_table() {
+            if table.contains_key("org_slug") {
+                eprintln!("WARNING: 'org_slug' is deprecated. Please use 'org' instead.");
+            }
+            if table.contains_key("game_slug") {
+                eprintln!("WARNING: 'game_slug' is deprecated. Please use 'game' instead.");
+            }
+            if table.contains_key("branch_slug") {
+                eprintln!("WARNING: 'branch_slug' is deprecated. Please use 'environment' instead.");
+                eprintln!("         Valid values: production, demo, sandbox");
+            }
+        }
 
         let config: WavedashConfig = toml::from_str(&config_content)
             .map_err(|e| anyhow::anyhow!("Failed to parse config file: {}", e))?;
