@@ -1,5 +1,6 @@
 use anyhow::Result;
 use directories::BaseDirs;
+use regex::Regex;
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -111,36 +112,6 @@ pub enum Environment {
     Sandbox,
 }
 
-/// Custom deserializer that handles both new environment values and legacy branch_slug values
-fn deserialize_environment<'de, D>(deserializer: D) -> Result<Environment, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let s = String::deserialize(deserializer)?;
-
-    // Try direct environment values first
-    match s.as_str() {
-        "production" => return Ok(Environment::Production),
-        "demo" => return Ok(Environment::Demo),
-        "sandbox" => return Ok(Environment::Sandbox),
-        _ => {}
-    }
-
-    // Legacy branch_slug mapping
-    if s.starts_with("internal") {
-        Ok(Environment::Sandbox)
-    } else if s.starts_with("production") {
-        Ok(Environment::Production)
-    } else if s.starts_with("demo") {
-        Ok(Environment::Demo)
-    } else {
-        Err(serde::de::Error::custom(format!(
-            "Invalid environment '{}'. Expected: production, demo, sandbox (or legacy: internal-*, production-*, demo-*)",
-            s
-        )))
-    }
-}
-
 impl Environment {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -159,18 +130,19 @@ impl std::fmt::Display for Environment {
 
 #[derive(Debug, Deserialize)]
 pub struct WavedashConfig {
-    /// Organization slug (supports legacy "org_slug" field)
-    #[serde(alias = "org_slug")]
+    /// Organization slug
     pub org: String,
 
-    /// Game slug (supports legacy "game_slug" field)
-    #[serde(alias = "game_slug")]
+    /// Game slug
     pub game: String,
 
-    /// Environment (supports legacy "branch_slug" field for backwards compatibility)
-    /// Old branch_slug values are mapped: "internal-*" -> sandbox, "production-*" -> production, "demo-*" -> demo
-    #[serde(alias = "branch_slug", deserialize_with = "deserialize_environment")]
+    /// Environment: production, demo, or sandbox
     pub environment: Environment,
+
+    /// Build version in semantic versioning format (major.minor.patch)
+    /// Example: "1.0.0", "2.1.3"
+    #[serde(rename = "version")]
+    pub build_version: Option<String>,
 
     pub upload_dir: PathBuf,
 
@@ -219,25 +191,19 @@ impl WavedashConfig {
             )
         })?;
 
-        // Check for deprecated field names and warn users
-        let raw_toml: toml::Value = toml::from_str(&config_content)
-            .map_err(|e| anyhow::anyhow!("Failed to parse config file: {}", e))?;
-
-        if let Some(table) = raw_toml.as_table() {
-            if table.contains_key("org_slug") {
-                eprintln!("WARNING: 'org_slug' is deprecated. Please use 'org' instead.");
-            }
-            if table.contains_key("game_slug") {
-                eprintln!("WARNING: 'game_slug' is deprecated. Please use 'game' instead.");
-            }
-            if table.contains_key("branch_slug") {
-                eprintln!("WARNING: 'branch_slug' is deprecated. Please use 'environment' instead.");
-                eprintln!("         Valid values: production, demo, sandbox");
-            }
-        }
-
         let config: WavedashConfig = toml::from_str(&config_content)
             .map_err(|e| anyhow::anyhow!("Failed to parse config file: {}", e))?;
+
+        // Validate build_version format if provided
+        if let Some(ref version) = config.build_version {
+            let semver_regex = Regex::new(r"^\d+\.\d+\.\d+$").unwrap();
+            if !semver_regex.is_match(version) {
+                anyhow::bail!(
+                    "Invalid version '{}'. Must be in semantic version format: major.minor.patch (e.g., 1.0.0, 2.1.3)",
+                    version
+                );
+            }
+        }
 
         Ok(config)
     }
@@ -257,7 +223,8 @@ impl WavedashConfig {
         }
     }
 
-    pub fn version(&self) -> Result<&str> {
+    /// Get the engine version (e.g., Godot version, Unity version)
+    pub fn engine_version(&self) -> Result<&str> {
         if let Some(ref godot) = self.godot {
             Ok(&godot.version)
         } else if let Some(ref unity) = self.unity {
@@ -267,6 +234,11 @@ impl WavedashConfig {
         } else {
             anyhow::bail!("No engine section found")
         }
+    }
+
+    /// Get the build version (semantic version: major.minor.patch)
+    pub fn get_build_version(&self) -> Option<&str> {
+        self.build_version.as_deref()
     }
 
     pub fn entrypoint(&self) -> Option<&str> {

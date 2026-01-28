@@ -52,6 +52,7 @@ async fn get_temp_credentials(
     environment: &str,
     engine: &str,
     engine_version: &str,
+    build_version: Option<&str>,
     entrypoint: Option<&str>,
     api_key: &str,
 ) -> Result<TempCredsResponse> {
@@ -67,6 +68,11 @@ async fn get_temp_credentials(
         "engine": engine,
         "engineVersion": engine_version
     });
+
+    // Add build version if provided (semantic version: major.minor.patch)
+    if let Some(v) = build_version {
+        request_body["version"] = serde_json::json!(v);
+    }
 
     // Add entrypoint if provided
     if let Some(ep) = entrypoint {
@@ -171,7 +177,8 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool) -> Result<()
         &wavedash_config.game,
         wavedash_config.environment.as_str(),
         engine_kind.as_config_key(),
-        wavedash_config.version()?,
+        wavedash_config.engine_version()?,
+        wavedash_config.get_build_version(),
         wavedash_config.entrypoint(),
         &api_key,
     )
