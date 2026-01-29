@@ -41,6 +41,9 @@ toml = "0.8"
 # Error Handling
 anyhow = "1.0"
 
+# Regex
+regex = "1.10"
+
 # Progress & UI
 indicatif = "0.17"
 
