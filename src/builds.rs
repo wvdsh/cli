@@ -54,6 +54,7 @@ async fn get_temp_credentials(
     engine_version: &str,
     build_version: &str,
     entrypoint: Option<&str>,
+    build_message: Option<&str>,
     api_key: &str,
 ) -> Result<TempCredsResponse> {
     let client = config::create_http_client()?;
@@ -73,6 +74,11 @@ async fn get_temp_credentials(
     // Add entrypoint if provided
     if let Some(ep) = entrypoint {
         request_body["entrypoint"] = serde_json::json!(ep);
+    }
+
+    // Add build message if provided
+    if let Some(msg) = build_message {
+        request_body["buildMessage"] = serde_json::json!(msg);
     }
 
     let response = client
@@ -142,7 +148,7 @@ async fn notify_upload_complete(
     Ok(())
 }
 
-pub async fn handle_build_push(config_path: PathBuf, verbose: bool) -> Result<()> {
+pub async fn handle_build_push(config_path: PathBuf, message: Option<String>, verbose: bool) -> Result<()> {
     // Load wavedash.toml config
     let wavedash_config = WavedashConfig::load(&config_path)?;
 
@@ -176,6 +182,7 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool) -> Result<()
         wavedash_config.engine_version()?,
         wavedash_config.get_build_version(),
         wavedash_config.entrypoint(),
+        message.as_deref(),
         &api_key,
     )
     .await?;
