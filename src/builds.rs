@@ -52,7 +52,7 @@ async fn get_temp_credentials(
     environment: &str,
     engine: &str,
     engine_version: &str,
-    build_version: Option<&str>,
+    build_version: &str,
     entrypoint: Option<&str>,
     api_key: &str,
 ) -> Result<TempCredsResponse> {
@@ -66,13 +66,9 @@ async fn get_temp_credentials(
 
     let mut request_body = serde_json::json!({
         "engine": engine,
-        "engineVersion": engine_version
+        "engineVersion": engine_version,
+        "version": build_version
     });
-
-    // Add build version if provided (semantic version: major.minor.patch)
-    if let Some(v) = build_version {
-        request_body["version"] = serde_json::json!(v);
-    }
 
     // Add entrypoint if provided
     if let Some(ep) = entrypoint {
