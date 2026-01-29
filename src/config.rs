@@ -141,8 +141,9 @@ pub struct WavedashConfig {
 
     /// Build version in semantic versioning format (major.minor.patch)
     /// Example: "1.0.0", "2.1.3"
+    /// Required - must match a release version to be selectable
     #[serde(rename = "version")]
-    pub build_version: Option<String>,
+    pub build_version: String,
 
     pub upload_dir: PathBuf,
 
@@ -194,15 +195,13 @@ impl WavedashConfig {
         let config: WavedashConfig = toml::from_str(&config_content)
             .map_err(|e| anyhow::anyhow!("Failed to parse config file: {}", e))?;
 
-        // Validate build_version format if provided
-        if let Some(ref version) = config.build_version {
-            let semver_regex = Regex::new(r"^\d+\.\d+\.\d+$").unwrap();
-            if !semver_regex.is_match(version) {
-                anyhow::bail!(
-                    "Invalid version '{}'. Must be in semantic version format: major.minor.patch (e.g., 1.0.0, 2.1.3)",
-                    version
-                );
-            }
+        // Validate build_version format (required, must be semver)
+        let semver_regex = Regex::new(r"^\d+\.\d+\.\d+$").unwrap();
+        if !semver_regex.is_match(&config.build_version) {
+            anyhow::bail!(
+                "Invalid version '{}'. Must be in semantic version format: major.minor.patch (e.g., 1.0.0, 2.1.3)",
+                config.build_version
+            );
         }
 
         Ok(config)
@@ -237,8 +236,8 @@ impl WavedashConfig {
     }
 
     /// Get the build version (semantic version: major.minor.patch)
-    pub fn get_build_version(&self) -> Option<&str> {
-        self.build_version.as_deref()
+    pub fn get_build_version(&self) -> &str {
+        &self.build_version
     }
 
     pub fn entrypoint(&self) -> Option<&str> {
