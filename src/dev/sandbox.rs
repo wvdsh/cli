@@ -28,7 +28,7 @@ pub fn build_sandbox_url(
         pairs.append_pair(UrlParams::GAME_BRANCH_SLUG, &wavedash_config.branch_slug);
         pairs.append_pair(UrlParams::GAME_CLOUD_ID, &wavedash_config.org_slug);
         pairs.append_pair(UrlParams::LOCAL_ORIGIN, local_origin);
-        pairs.append_pair(UrlParams::SANDBOX, "true");
+        pairs.append_pair(UrlParams::LOCAL_BUILD, "true");
         pairs.append_pair(UrlParams::ENGINE, engine_label);
         pairs.append_pair(UrlParams::ENGINE_VERSION, engine_version);
 
