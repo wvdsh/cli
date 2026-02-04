@@ -1,5 +1,6 @@
 use anyhow::Result;
 use directories::BaseDirs;
+use regex::Regex;
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -102,11 +103,48 @@ pub struct CustomSection {
     pub entrypoint: String,
 }
 
+/// The cloud environment for the game build
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Environment {
+    Production,
+    Demo,
+    Sandbox,
+}
+
+impl Environment {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Environment::Production => "production",
+            Environment::Demo => "demo",
+            Environment::Sandbox => "sandbox",
+        }
+    }
+}
+
+impl std::fmt::Display for Environment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct WavedashConfig {
-    pub org_slug: String,
-    pub game_slug: String,
-    pub branch_slug: String,
+    /// Organization slug
+    pub org: String,
+
+    /// Game slug
+    pub game: String,
+
+    /// Environment: production, demo, or sandbox
+    pub environment: Environment,
+
+    /// Build version in semantic versioning format (major.minor.patch)
+    /// Example: "1.0.0", "2.1.3"
+    /// Required - must match a release version to be selectable
+    #[serde(rename = "version")]
+    pub build_version: String,
+
     pub upload_dir: PathBuf,
 
     #[serde(rename = "godot")]
@@ -157,6 +195,15 @@ impl WavedashConfig {
         let config: WavedashConfig = toml::from_str(&config_content)
             .map_err(|e| anyhow::anyhow!("Failed to parse config file: {}", e))?;
 
+        // Validate build_version format (required, must be semver)
+        let semver_regex = Regex::new(r"^\d+\.\d+\.\d+$").unwrap();
+        if !semver_regex.is_match(&config.build_version) {
+            anyhow::bail!(
+                "Invalid version '{}'. Must be in semantic version format: major.minor.patch (e.g., 1.0.0, 2.1.3)",
+                config.build_version
+            );
+        }
+
         Ok(config)
     }
 
@@ -175,7 +222,8 @@ impl WavedashConfig {
         }
     }
 
-    pub fn version(&self) -> Result<&str> {
+    /// Get the engine version (e.g., Godot version, Unity version)
+    pub fn engine_version(&self) -> Result<&str> {
         if let Some(ref godot) = self.godot {
             Ok(&godot.version)
         } else if let Some(ref unity) = self.unity {
@@ -185,6 +233,11 @@ impl WavedashConfig {
         } else {
             anyhow::bail!("No engine section found")
         }
+    }
+
+    /// Get the build version (semantic version: major.minor.patch)
+    pub fn get_build_version(&self) -> &str {
+        &self.build_version
     }
 
     pub fn entrypoint(&self) -> Option<&str> {
