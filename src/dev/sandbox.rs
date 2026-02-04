@@ -26,7 +26,6 @@ pub fn build_sandbox_url(
     {
         let mut pairs = game_url.query_pairs_mut();
         pairs.append_pair(UrlParams::GAME_SUBDOMAIN, &wavedash_config.game);
-        pairs.append_pair(UrlParams::GAME_CLOUD_ID, &wavedash_config.org);
         pairs.append_pair(UrlParams::LOCAL_ORIGIN, local_origin);
         pairs.append_pair(UrlParams::LOCAL_BUILD, "true");
         pairs.append_pair(UrlParams::ENGINE, engine_label);
