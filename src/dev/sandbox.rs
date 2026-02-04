@@ -18,14 +18,14 @@ pub fn build_sandbox_url(
     let base = host.trim_end_matches('/');
 
     // First, build the game URL (what will be the rdurl parameter)
-    let game_url_full = format!("{}/play/{}", base, wavedash_config.game_slug);
+    // Local builds always use the sandbox environment for safety
+    let game_url_full = format!("{}/play/{}/sandbox", base, wavedash_config.game_slug);
     let mut game_url = Url::parse(&game_url_full)
         .with_context(|| format!("Unable to parse website host {}", game_url_full))?;
 
     {
         let mut pairs = game_url.query_pairs_mut();
         pairs.append_pair(UrlParams::GAME_SUBDOMAIN, &wavedash_config.game_slug);
-        pairs.append_pair(UrlParams::GAME_BRANCH_SLUG, &wavedash_config.branch_slug);
         pairs.append_pair(UrlParams::GAME_CLOUD_ID, &wavedash_config.org_slug);
         pairs.append_pair(UrlParams::LOCAL_ORIGIN, local_origin);
         pairs.append_pair(UrlParams::LOCAL_BUILD, "true");
