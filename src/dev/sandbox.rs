@@ -19,14 +19,14 @@ pub fn build_sandbox_url(
 
     // First, build the game URL (what will be the rdurl parameter)
     // Local builds always use the sandbox environment for safety
-    let game_url_full = format!("{}/play/{}/sandbox", base, wavedash_config.game_slug);
+    let game_url_full = format!("{}/play/{}/sandbox", base, wavedash_config.game_id);
     let mut game_url = Url::parse(&game_url_full)
         .with_context(|| format!("Unable to parse website host {}", game_url_full))?;
 
     {
         let mut pairs = game_url.query_pairs_mut();
-        pairs.append_pair(UrlParams::GAME_SUBDOMAIN, &wavedash_config.game_slug);
-        pairs.append_pair(UrlParams::GAME_CLOUD_ID, &wavedash_config.org_slug);
+        pairs.append_pair(UrlParams::GAME_SUBDOMAIN, &wavedash_config.game_id);
+        pairs.append_pair(UrlParams::GAME_CLOUD_ID, &wavedash_config.game_id);
         pairs.append_pair(UrlParams::LOCAL_ORIGIN, local_origin);
         pairs.append_pair(UrlParams::LOCAL_BUILD, "true");
         pairs.append_pair(UrlParams::ENGINE, engine_label);
@@ -47,7 +47,7 @@ pub fn build_sandbox_url(
     let host_url = Url::parse(&format!("https://{}", base.trim_start_matches("https://").trim_start_matches("http://")))?;
     let main_host = host_url.host_str().ok_or_else(|| anyhow::anyhow!("Could not extract host"))?;
 
-    let subdomain = format!("{}.sandbox.{}", wavedash_config.game_slug, main_host);
+    let subdomain = format!("{}.sandbox.{}", wavedash_config.game_id, main_host);
     let permission_grant_url = format!("https://{}/sandbox/permission-grant", subdomain);
 
     let mut url = Url::parse(&permission_grant_url)?;

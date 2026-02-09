@@ -104,9 +104,8 @@ pub struct CustomSection {
 
 #[derive(Debug, Deserialize)]
 pub struct WavedashConfig {
-    pub org_slug: String,
-    pub game_slug: String,
-    pub branch_slug: String,
+    pub game_id: String,
+    pub branch: String,
     pub upload_dir: PathBuf,
 
     #[serde(rename = "godot")]
