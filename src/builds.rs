@@ -47,9 +47,8 @@ struct TempCredsResponse {
 }
 
 async fn get_temp_credentials(
-    org_slug: &str,
-    game_slug: &str,
-    branch_slug: &str,
+    game_id: &str,
+    branch: &str,
     engine: &str,
     engine_version: &str,
     entrypoint: Option<&str>,
@@ -59,8 +58,8 @@ async fn get_temp_credentials(
     let api_host = config::get("api_host")?;
 
     let url = format!(
-        "{}/api/organizations/{}/games/{}/branches/{}/builds/create-temp-r2-creds",
-        api_host, org_slug, game_slug, branch_slug
+        "{}/api/games/{}/branches/{}/builds/create-temp-r2-creds",
+        api_host, game_id, branch
     );
 
     let mut request_body = serde_json::json!({
@@ -101,9 +100,8 @@ async fn get_temp_credentials(
 }
 
 async fn notify_upload_complete(
-    org_slug: &str,
-    game_slug: &str,
-    branch_slug: &str,
+    game_id: &str,
+    branch: &str,
     build_id: &str,
     api_key: &str,
 ) -> Result<()> {
@@ -111,8 +109,8 @@ async fn notify_upload_complete(
     let api_host = config::get("api_host")?;
 
     let url = format!(
-        "{}/api/organizations/{}/games/{}/branches/{}/builds/{}/upload-completed",
-        api_host, org_slug, game_slug, branch_slug, build_id
+        "{}/api/games/{}/branches/{}/builds/{}/upload-completed",
+        api_host, game_id, branch, build_id
     );
 
     let response = client
@@ -167,9 +165,8 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool) -> Result<()
     // Get temporary R2 credentials
     let engine_kind = wavedash_config.engine_type()?;
     let creds = get_temp_credentials(
-        &wavedash_config.org_slug,
-        &wavedash_config.game_slug,
-        &wavedash_config.branch_slug,
+        &wavedash_config.game_id,
+        &wavedash_config.branch,
         engine_kind.as_config_key(),
         wavedash_config.version()?,
         wavedash_config.entrypoint(),
@@ -199,9 +196,8 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool) -> Result<()
 
     // Notify the server that upload is complete
     notify_upload_complete(
-        &wavedash_config.org_slug,
-        &wavedash_config.game_slug,
-        &wavedash_config.branch_slug,
+        &wavedash_config.game_id,
+        &wavedash_config.branch,
         &creds.game_build_id,
         &api_key,
     )
