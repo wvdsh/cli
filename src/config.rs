@@ -107,6 +107,7 @@ pub struct WavedashConfig {
     pub game_id: String,
     pub branch: String,
     pub upload_dir: PathBuf,
+    pub version: String,
 
     #[serde(rename = "godot")]
     pub godot: Option<GodotSection>,
@@ -174,7 +175,7 @@ impl WavedashConfig {
         }
     }
 
-    pub fn version(&self) -> Result<&str> {
+    pub fn engine_version(&self) -> Result<&str> {
         if let Some(ref godot) = self.godot {
             Ok(&godot.version)
         } else if let Some(ref unity) = self.unity {
