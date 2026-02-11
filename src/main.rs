@@ -3,6 +3,7 @@ mod builds;
 mod config;
 mod dev;
 mod file_staging;
+mod init;
 mod updater;
 
 use anyhow::Result;
@@ -11,6 +12,23 @@ use builds::handle_build_push;
 use clap::{Parser, Subcommand};
 use dev::handle_dev;
 use std::path::PathBuf;
+
+#[derive(Clone, clap::ValueEnum)]
+enum EngineArg {
+    Godot,
+    Unity,
+    Custom,
+}
+
+impl From<EngineArg> for config::EngineKind {
+    fn from(arg: EngineArg) -> Self {
+        match arg {
+            EngineArg::Godot => config::EngineKind::Godot,
+            EngineArg::Unity => config::EngineKind::Unity,
+            EngineArg::Custom => config::EngineKind::Custom,
+        }
+    }
+}
 
 fn mask_token(token: &str) -> String {
     if token.len() > 10 {
@@ -50,6 +68,15 @@ enum Commands {
         config: Option<PathBuf>,
         #[arg(long = "no-open", help = "Don't open the sandbox URL in the browser")]
         no_open: bool,
+    },
+    #[command(about = "Initialize a new wavedash.toml config file")]
+    Init {
+        #[arg(long)]
+        game_id: String,
+        #[arg(long)]
+        branch: String,
+        #[arg(long, value_enum)]
+        engine: Option<EngineArg>,
     },
     #[command(about = "Check for and install updates")]
     Update,
@@ -152,6 +179,13 @@ async fn main() -> Result<()> {
         },
         Commands::Dev { config, no_open } => {
             handle_dev(config, cli.verbose, no_open).await?;
+        }
+        Commands::Init {
+            game_id,
+            branch,
+            engine,
+        } => {
+            init::handle_init(game_id, branch, engine.map(|e| e.into()))?;
         }
         Commands::Update => {
             updater::run_update().await?;
