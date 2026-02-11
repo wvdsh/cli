@@ -160,6 +160,61 @@ impl WavedashConfig {
         Ok(config)
     }
 
+    pub fn display_summary(&self) -> String {
+        let engine_line = if let Some(ref godot) = self.godot {
+            format!("engine     = godot (v{})", godot.version)
+        } else if let Some(ref unity) = self.unity {
+            format!("engine     = unity (v{})", unity.version)
+        } else if let Some(ref custom) = self.custom {
+            format!(
+                "engine     = custom (v{}, entrypoint: {})",
+                custom.version, custom.entrypoint
+            )
+        } else {
+            "engine     = (none)".to_string()
+        };
+
+        format!(
+            "game_id    = {}\n\
+             branch     = {}\n\
+             upload_dir = {}\n\
+             version    = {}\n\
+             {}",
+            self.game_id,
+            self.branch,
+            self.upload_dir.display(),
+            self.version,
+            engine_line,
+        )
+    }
+
+    /// Update a top-level field in the TOML file using toml_edit for lossless editing.
+    pub fn update_field(config_path: &PathBuf, key: &str, value: &str) -> Result<String> {
+        let content = std::fs::read_to_string(config_path).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to read config file at {}: {}",
+                config_path.display(),
+                e
+            )
+        })?;
+
+        let mut doc = content
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| anyhow::anyhow!("Failed to parse config file: {}", e))?;
+
+        let old_value = doc
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow::anyhow!("Key '{}' not found in config", key))?;
+
+        doc[key] = toml_edit::value(value);
+
+        std::fs::write(config_path, doc.to_string())?;
+
+        Ok(old_value)
+    }
+
     pub fn engine_type(&self) -> Result<EngineKind> {
         match (
             self.godot.is_some(),

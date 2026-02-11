@@ -1,10 +1,12 @@
 mod auth;
 mod builds;
 mod config;
+mod config_cmd;
 mod dev;
 mod file_staging;
 mod init;
 mod updater;
+mod version_cmd;
 
 use anyhow::Result;
 use auth::{login_with_browser, AuthManager, AuthSource};
@@ -69,6 +71,18 @@ enum Commands {
         #[arg(long = "no-open", help = "Don't open the sandbox URL in the browser")]
         no_open: bool,
     },
+    #[command(about = "Show or update wavedash.toml configuration")]
+    Config {
+        #[command(subcommand)]
+        action: Option<ConfigCommands>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+    },
     #[command(about = "Initialize a new wavedash.toml config file")]
     Init {
         #[arg(long)]
@@ -80,6 +94,18 @@ enum Commands {
     },
     #[command(about = "Check for and install updates")]
     Update,
+    #[command(about = "Version management")]
+    Version {
+        #[command(subcommand)]
+        action: VersionCommands,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -104,6 +130,26 @@ enum BuildCommands {
         config: PathBuf,
         #[arg(short = 'm', long = "message", help = "Build message")]
         message: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigCommands {
+    #[command(about = "Set a config field value")]
+    Set {
+        #[arg(help = "Config key (branch, version, upload_dir, game_id)")]
+        key: String,
+        #[arg(help = "New value")]
+        value: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum VersionCommands {
+    #[command(about = "Bump the version (patch, minor, or major)")]
+    Bump {
+        #[arg(value_enum, default_value = "patch")]
+        level: version_cmd::BumpLevel,
     },
 }
 
@@ -180,6 +226,14 @@ async fn main() -> Result<()> {
         Commands::Dev { config, no_open } => {
             handle_dev(config, cli.verbose, no_open).await?;
         }
+        Commands::Config { action, config } => match action {
+            Some(ConfigCommands::Set { key, value }) => {
+                config_cmd::handle_config_set(config, key, value)?;
+            }
+            None => {
+                config_cmd::handle_config_show(config)?;
+            }
+        },
         Commands::Init {
             game_id,
             branch,
@@ -190,6 +244,11 @@ async fn main() -> Result<()> {
         Commands::Update => {
             updater::run_update().await?;
         }
+        Commands::Version { action, config } => match action {
+            VersionCommands::Bump { level } => {
+                version_cmd::handle_version_bump(config, level)?;
+            }
+        },
     }
 
     // Wait for background update check to complete
