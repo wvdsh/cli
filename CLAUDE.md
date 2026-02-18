@@ -3,3 +3,4 @@
 
 ## Development
 - Environment variables are managed by Doppler. Always use `doppler run --` as a prefix when running cargo commands (build, check, clippy, run, test, etc.). For example: `doppler run -- cargo check`, `doppler run -- cargo clippy`.
+- To run the CLI locally, use `doppler run -- cargo run <command>`. For example: `doppler run -- cargo run build push`.

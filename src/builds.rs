@@ -171,6 +171,11 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
         anyhow::bail!("Source must be a directory: {}", upload_dir.display());
     }
 
+    println!(
+        "Pushing v{} to {} ...",
+        wavedash_config.version, wavedash_config.branch
+    );
+
     // Get temporary R2 credentials
     let engine_kind = wavedash_config.engine_type()?;
     let creds = get_temp_credentials(
@@ -213,6 +218,8 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
         &api_key,
     )
     .await?;
+
+    println!("Build ID: {}", creds.game_build_id);
 
     Ok(())
 }
