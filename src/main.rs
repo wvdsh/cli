@@ -1,3 +1,5 @@
+mod achievements;
+mod api_client;
 mod auth;
 mod builds;
 mod config;
@@ -5,6 +7,7 @@ mod config_cmd;
 mod dev;
 mod file_staging;
 mod init;
+mod stats;
 mod updater;
 mod version_cmd;
 
@@ -98,6 +101,30 @@ enum Commands {
     Version {
         #[command(subcommand)]
         action: VersionCommands,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+    },
+    #[command(about = "Manage game stats")]
+    Stats {
+        #[command(subcommand)]
+        action: stats::StatsCommands,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+    },
+    #[command(about = "Manage game achievements")]
+    Achievements {
+        #[command(subcommand)]
+        action: achievements::AchievementsCommands,
         #[arg(
             short = 'c',
             long = "config",
@@ -249,6 +276,12 @@ async fn main() -> Result<()> {
                 version_cmd::handle_version_bump(config, level)?;
             }
         },
+        Commands::Stats { action, config } => {
+            stats::handle_stats(config, action).await?;
+        }
+        Commands::Achievements { action, config } => {
+            achievements::handle_achievements(config, action).await?;
+        }
     }
 
     // Wait for background update check to complete
