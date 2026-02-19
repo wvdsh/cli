@@ -1,10 +1,10 @@
 use crate::api_client::ApiClient;
 use crate::config::WavedashConfig;
 use crate::stats::{authority_label, AuthorityArg};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Subcommand;
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Subcommand)]
 pub enum AchievementsCommands {
@@ -20,9 +20,9 @@ pub enum AchievementsCommands {
         /// Description
         #[arg(long)]
         description: String,
-        /// Image URL
+        /// Path to image file (jpg, jpeg, png, gif, webp)
         #[arg(long)]
-        image: String,
+        image: PathBuf,
         /// Authority level
         #[arg(long, value_enum)]
         authority: AuthorityArg,
@@ -46,9 +46,9 @@ pub enum AchievementsCommands {
         /// New description
         #[arg(long)]
         description: Option<String>,
-        /// New image URL
+        /// Path to new image file (jpg, jpeg, png, gif, webp)
         #[arg(long)]
-        image: Option<String>,
+        image: Option<PathBuf>,
         /// New authority level
         #[arg(long, value_enum)]
         authority: Option<AuthorityArg>,
@@ -92,6 +92,68 @@ struct Achievement {
 struct SuccessResponse {
     #[allow(dead_code)]
     success: bool,
+}
+
+#[derive(Deserialize)]
+struct UploadUrlResponse {
+    #[serde(rename = "uploadUrl")]
+    upload_url: String,
+    #[serde(rename = "publicUrl")]
+    public_url: String,
+}
+
+const ALLOWED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp"];
+
+fn content_type_for_ext(ext: &str) -> &'static str {
+    match ext {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Upload a local image file to R2 via presigned URL and return the public URL.
+async fn upload_image(client: &ApiClient, game_id: &str, path: &Path) -> Result<String> {
+    // Validate file exists
+    anyhow::ensure!(path.exists(), "Image file not found: {}", path.display());
+
+    // Extract and validate extension
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .ok_or_else(|| anyhow::anyhow!("Image file has no extension: {}", path.display()))?;
+
+    anyhow::ensure!(
+        ALLOWED_EXTENSIONS.contains(&ext.as_str()),
+        "Unsupported image format '{}'. Allowed: {}",
+        ext,
+        ALLOWED_EXTENSIONS.join(", ")
+    );
+
+    // Read file bytes
+    let file_bytes =
+        std::fs::read(path).with_context(|| format!("Failed to read {}", path.display()))?;
+
+    // Request presigned upload URL
+    let resp: UploadUrlResponse = client
+        .post(
+            &format!("/games/{}/assets/upload-url", game_id),
+            &serde_json::json!({
+                "assetType": "ACHIEVEMENT",
+                "fileExtension": ext,
+            }),
+        )
+        .await?;
+
+    // Upload to presigned URL
+    client
+        .put_presigned(&resp.upload_url, file_bytes, content_type_for_ext(&ext))
+        .await?;
+
+    Ok(resp.public_url)
 }
 
 pub async fn handle_achievements(
@@ -176,11 +238,14 @@ pub async fn handle_achievements(
             stat_identifier,
             stat_threshold,
         } => {
+            println!("Uploading image...");
+            let image_url = upload_image(&client, game_id, &image).await?;
+
             let mut body = serde_json::json!({
                 "identifier": identifier,
                 "displayName": display_name,
                 "description": description,
-                "image": image,
+                "image": image_url,
                 "authority": authority.as_number(),
             });
             if let Some(p) = points {
@@ -234,10 +299,12 @@ pub async fn handle_achievements(
                     serde_json::Value::String(desc.clone()),
                 );
             }
-            if let Some(img) = &image {
+            if let Some(img_path) = &image {
+                println!("Uploading image...");
+                let image_url = upload_image(&client, game_id, img_path).await?;
                 body.insert(
                     "image".to_string(),
-                    serde_json::Value::String(img.clone()),
+                    serde_json::Value::String(image_url),
                 );
             }
             if let Some(auth) = &authority {

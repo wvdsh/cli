@@ -84,6 +84,25 @@ impl ApiClient {
         self.handle_response(response).await
     }
 
+    /// Upload raw bytes to a presigned URL (no auth header, no base URL prefix).
+    pub async fn put_presigned(&self, url: &str, body: Vec<u8>, content_type: &str) -> Result<()> {
+        let response = self
+            .client
+            .put(url)
+            .header("Content-Type", content_type)
+            .body(body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            anyhow::bail!("Presigned upload failed ({}): {}", status, error_text);
+        }
+
+        Ok(())
+    }
+
     async fn handle_response<T: DeserializeOwned>(
         &self,
         response: reqwest::Response,
