@@ -113,7 +113,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
     let sandbox_url = build_sandbox_url(
         &wavedash_config,
         engine_label,
-        wavedash_config.version()?,
+        wavedash_config.engine_version()?,
         &local_origin,
         entrypoint.as_deref(),
         entrypoint_params.as_ref(),
