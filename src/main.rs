@@ -23,6 +23,9 @@ enum EngineArg {
     Godot,
     Unity,
     Custom,
+    #[value(name = "jsdos")]
+    JsDos,
+    Ruffle,
 }
 
 impl From<EngineArg> for config::EngineKind {
@@ -31,6 +34,8 @@ impl From<EngineArg> for config::EngineKind {
             EngineArg::Godot => config::EngineKind::Godot,
             EngineArg::Unity => config::EngineKind::Unity,
             EngineArg::Custom => config::EngineKind::Custom,
+            EngineArg::JsDos => config::EngineKind::JsDos,
+            EngineArg::Ruffle => config::EngineKind::Ruffle,
         }
     }
 }

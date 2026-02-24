@@ -103,6 +103,18 @@ pub struct CustomSection {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct JsDosSection {
+    pub version: String,
+    pub entrypoint: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RuffleSection {
+    pub version: String,
+    pub entrypoint: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct WavedashConfig {
     pub game_id: String,
     pub branch: String,
@@ -117,6 +129,12 @@ pub struct WavedashConfig {
 
     #[serde(rename = "custom")]
     pub custom: Option<CustomSection>,
+
+    #[serde(rename = "jsdos")]
+    pub jsdos: Option<JsDosSection>,
+
+    #[serde(rename = "ruffle")]
+    pub ruffle: Option<RuffleSection>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +142,8 @@ pub enum EngineKind {
     Godot,
     Unity,
     Custom,
+    JsDos,
+    Ruffle,
 }
 
 impl EngineKind {
@@ -132,6 +152,8 @@ impl EngineKind {
             EngineKind::Godot => "godot",
             EngineKind::Unity => "unity",
             EngineKind::Custom => "custom",
+            EngineKind::JsDos => "jsdos",
+            EngineKind::Ruffle => "ruffle",
         }
     }
 
@@ -140,6 +162,8 @@ impl EngineKind {
             EngineKind::Godot => "GODOT",
             EngineKind::Unity => "UNITY",
             EngineKind::Custom => "CUSTOM",
+            EngineKind::JsDos => "JSDOS",
+            EngineKind::Ruffle => "RUFFLE",
         }
     }
 }
@@ -169,6 +193,16 @@ impl WavedashConfig {
             format!(
                 "engine     = custom (v{}, entrypoint: {})",
                 custom.version, custom.entrypoint
+            )
+        } else if let Some(ref jsdos) = self.jsdos {
+            format!(
+                "engine     = jsdos (v{}, entrypoint: {})",
+                jsdos.version, jsdos.entrypoint
+            )
+        } else if let Some(ref ruffle) = self.ruffle {
+            format!(
+                "engine     = ruffle (v{}, entrypoint: {})",
+                ruffle.version, ruffle.entrypoint
             )
         } else {
             "engine     = (none)".to_string()
@@ -216,16 +250,24 @@ impl WavedashConfig {
     }
 
     pub fn engine_type(&self) -> Result<EngineKind> {
-        match (
-            self.godot.is_some(),
-            self.unity.is_some(),
-            self.custom.is_some(),
-        ) {
-            (true, false, false) => Ok(EngineKind::Godot),
-            (false, true, false) => Ok(EngineKind::Unity),
-            (false, false, true) => Ok(EngineKind::Custom),
+        let engines: Vec<EngineKind> = [
+            self.godot.is_some().then_some(EngineKind::Godot),
+            self.unity.is_some().then_some(EngineKind::Unity),
+            self.custom.is_some().then_some(EngineKind::Custom),
+            self.jsdos.is_some().then_some(EngineKind::JsDos),
+            self.ruffle.is_some().then_some(EngineKind::Ruffle),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        match engines.len() {
+            1 => Ok(engines[0]),
+            0 => anyhow::bail!(
+                "Config must have exactly one engine section: [godot], [unity], [custom], [jsdos], or [ruffle]"
+            ),
             _ => anyhow::bail!(
-                "Config must have exactly one of [godot], [unity], or [custom] sections"
+                "Config must have exactly one engine section: [godot], [unity], [custom], [jsdos], or [ruffle]"
             ),
         }
     }
@@ -237,12 +279,20 @@ impl WavedashConfig {
             Ok(&unity.version)
         } else if let Some(ref custom) = self.custom {
             Ok(&custom.version)
+        } else if let Some(ref jsdos) = self.jsdos {
+            Ok(&jsdos.version)
+        } else if let Some(ref ruffle) = self.ruffle {
+            Ok(&ruffle.version)
         } else {
             anyhow::bail!("No engine section found")
         }
     }
 
     pub fn entrypoint(&self) -> Option<&str> {
-        self.custom.as_ref().map(|c| c.entrypoint.as_str())
+        self.custom
+            .as_ref()
+            .map(|c| c.entrypoint.as_str())
+            .or_else(|| self.jsdos.as_ref().map(|j| j.entrypoint.as_str()))
+            .or_else(|| self.ruffle.as_ref().map(|r| r.entrypoint.as_str()))
     }
 }
