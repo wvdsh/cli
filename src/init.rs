@@ -22,7 +22,7 @@ pub fn handle_init(game_id: String, branch: String, engine: Option<EngineKind>) 
     let engine = match engine {
         Some(e) => e,
         None => {
-            let items = &["Godot", "Unity", "Custom"];
+            let items = &["Godot", "Unity", "Custom", "JsDos", "Ruffle"];
             let selection = Select::new()
                 .with_prompt("Select engine")
                 .items(items)
@@ -33,6 +33,8 @@ pub fn handle_init(game_id: String, branch: String, engine: Option<EngineKind>) 
                 0 => EngineKind::Godot,
                 1 => EngineKind::Unity,
                 2 => EngineKind::Custom,
+                3 => EngineKind::JsDos,
+                4 => EngineKind::Ruffle,
                 _ => unreachable!(),
             }
         }
@@ -43,6 +45,12 @@ pub fn handle_init(game_id: String, branch: String, engine: Option<EngineKind>) 
         EngineKind::Unity => "[unity]\nversion = \"6000.0\"\n".to_string(),
         EngineKind::Custom => {
             "[custom]\nversion = \"1.0\"\nentrypoint = \"index.html\"\n".to_string()
+        }
+        EngineKind::JsDos => {
+            "[jsdos]\nversion = \"1.0\"\nentrypoint = \"entrypoint.js\"\n".to_string()
+        }
+        EngineKind::Ruffle => {
+            "[ruffle]\nversion = \"1.0\"\nentrypoint = \"game.swf\"\n".to_string()
         }
     };
 
