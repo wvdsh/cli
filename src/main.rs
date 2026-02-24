@@ -75,6 +75,8 @@ enum BuildCommands {
             default_value = "./wavedash.toml"
         )]
         config: PathBuf,
+        #[arg(short = 'm', long = "message", help = "Build message")]
+        message: Option<String>,
     },
 }
 
@@ -144,8 +146,8 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Build { action } => match action {
-            BuildCommands::Push { config } => {
-                handle_build_push(config, cli.verbose).await?;
+            BuildCommands::Push { config, message } => {
+                handle_build_push(config, cli.verbose, message).await?;
             }
         },
         Commands::Dev { config, no_open } => {
