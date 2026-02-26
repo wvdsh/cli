@@ -40,11 +40,17 @@ pub fn build_sandbox_url(
 
     // Build the permission-grant URL on the subdomain
     // Required for local network access within the iframe
-    let host_url = Url::parse(&format!("https://{}", base.trim_start_matches("https://").trim_start_matches("http://")))?;
-    let main_host = host_url.host_str().ok_or_else(|| anyhow::anyhow!("Could not extract host"))?;
+    let host_url = Url::parse(&format!(
+        "https://{}",
+        base.trim_start_matches("https://")
+            .trim_start_matches("http://")
+    ))?;
+    let main_host = host_url
+        .host_str()
+        .ok_or_else(|| anyhow::anyhow!("Could not extract host"))?;
 
     let subdomain = format!("{}.local.{}", wavedash_config.game_id, main_host);
-    let permission_grant_url = format!("https://{}/sandbox/permission-grant", subdomain);
+    let permission_grant_url = format!("https://{}/local/permission-grant", subdomain);
 
     let mut url = Url::parse(&permission_grant_url)?;
 
