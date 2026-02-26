@@ -107,7 +107,6 @@ pub struct WavedashConfig {
     pub game_id: String,
     pub branch: String,
     pub upload_dir: PathBuf,
-    pub version: String,
 
     #[serde(rename = "godot")]
     pub godot: Option<GodotSection>,

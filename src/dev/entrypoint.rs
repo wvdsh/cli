@@ -42,7 +42,7 @@ pub async fn fetch_entrypoint_params(engine: &str, html_path: &Path) -> Result<V
         .with_context(|| format!("Failed to read {}", html_path.display()))?;
     let api_host = config::get("api_host")?;
     let endpoint = format!(
-        "{}/sandbox/entrypoint-params",
+        "{}/cli/entrypoint-params",
         api_host.trim_end_matches('/')
     );
 
@@ -52,17 +52,17 @@ pub async fn fetch_entrypoint_params(engine: &str, html_path: &Path) -> Result<V
         .query(&[("engine", engine), ("htmlContent", html_content.as_str())])
         .send()
         .await
-        .with_context(|| "Failed to call sandbox entrypoint params endpoint")?;
+        .with_context(|| "Failed to call CLI entrypoint params endpoint")?;
 
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
 
     if !status.is_success() {
-        anyhow::bail!("Sandbox endpoint responded with {}: {}", status, body);
+        anyhow::bail!("CLI endpoint responded with {}: {}", status, body);
     }
 
     let parsed: EntrypointParamsResponse =
-        serde_json::from_str(&body).with_context(|| "Failed to parse sandbox response")?;
+        serde_json::from_str(&body).with_context(|| "Failed to parse CLI response")?;
 
     Ok(parsed.entrypoint_params)
 }

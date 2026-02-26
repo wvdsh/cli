@@ -53,7 +53,6 @@ async fn get_temp_credentials(
     engine_version: &str,
     entrypoint: Option<&str>,
     message: Option<&str>,
-    version: &str,
     api_key: &str,
 ) -> Result<TempCredsResponse> {
     let client = config::create_http_client()?;
@@ -78,8 +77,6 @@ async fn get_temp_credentials(
     if let Some(msg) = message {
         request_body["buildMessage"] = serde_json::json!(msg);
     }
-
-    request_body["version"] = serde_json::json!(version);
 
     let response = client
         .post(&url)
@@ -180,7 +177,6 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
         wavedash_config.engine_version()?,
         wavedash_config.entrypoint(),
         message.as_deref(),
-        &wavedash_config.version,
         &api_key,
     )
     .await?;
@@ -194,7 +190,7 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
     };
 
     // Copy necessary files to upload directory
-    let staging = FileStaging::prepare(&config_path, config_dir, &upload_dir, &wavedash_config)?;
+    let staging = FileStaging::prepare(&config_path, &upload_dir, &wavedash_config)?;
 
     // Initialize uploader and upload
     let uploader = R2Uploader::new(&r2_config, &creds.bucket_name)?;
