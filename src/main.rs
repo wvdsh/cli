@@ -108,6 +108,9 @@ async fn main() -> Result<()> {
                             Ok(result) => {
                                 auth_manager.store_credentials(&result.api_key, result.email.as_deref())?;
                                 println!("✓ Successfully authenticated!");
+                                if let Some(ref email) = result.email {
+                                    println!("Email: {}", email);
+                                }
                             }
                             Err(e) => {
                                 eprintln!("Authentication failed: {}", e);
