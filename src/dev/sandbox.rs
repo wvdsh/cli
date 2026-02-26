@@ -17,18 +17,14 @@ pub fn build_sandbox_url(
     let host = config::get("open_browser_website_host")?;
     let base = host.trim_end_matches('/');
 
-    // First, build the game URL (what will be the rdurl parameter)
-    // Local builds always use the sandbox environment for safety
-    let game_url_full = format!("{}/play/{}/sandbox", base, wavedash_config.game_id);
+    // Build the game URL (what will be the rdurl parameter)
+    let game_url_full = format!("{}/play/local/{}", base, wavedash_config.game_id);
     let mut game_url = Url::parse(&game_url_full)
         .with_context(|| format!("Unable to parse website host {}", game_url_full))?;
 
     {
         let mut pairs = game_url.query_pairs_mut();
-        pairs.append_pair(UrlParams::GAME_SUBDOMAIN, &wavedash_config.game_id);
-        pairs.append_pair(UrlParams::GAME_CLOUD_ID, &wavedash_config.game_id);
         pairs.append_pair(UrlParams::LOCAL_ORIGIN, local_origin);
-        pairs.append_pair(UrlParams::LOCAL_BUILD, "true");
         pairs.append_pair(UrlParams::ENGINE, engine_label);
         pairs.append_pair(UrlParams::ENGINE_VERSION, engine_version);
 
@@ -42,12 +38,12 @@ pub fn build_sandbox_url(
         }
     }
 
-    // Now build the permission-grant URL on the subdomain
-    // Extract the host from the base URL (e.g., "staging.wavedash.gg")
+    // Build the permission-grant URL on the subdomain
+    // Required for local network access within the iframe
     let host_url = Url::parse(&format!("https://{}", base.trim_start_matches("https://").trim_start_matches("http://")))?;
     let main_host = host_url.host_str().ok_or_else(|| anyhow::anyhow!("Could not extract host"))?;
 
-    let subdomain = format!("{}.sandbox.{}", wavedash_config.game_id, main_host);
+    let subdomain = format!("{}.local.{}", wavedash_config.game_id, main_host);
     let permission_grant_url = format!("https://{}/sandbox/permission-grant", subdomain);
 
     let mut url = Url::parse(&permission_grant_url)?;
