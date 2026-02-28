@@ -210,5 +210,17 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
     )
     .await?;
 
+    let site_host = config::get("open_browser_website_host")?;
+    let play_url = format!(
+        "{}/play/{}?gbid={}",
+        site_host.trim_end_matches('/'),
+        wavedash_config.game_id,
+        creds.game_build_id
+    );
+
+    println!();
+    println!("Build ID: {}", creds.game_build_id);
+    println!("Play URL: {}", play_url);
+
     Ok(())
 }
