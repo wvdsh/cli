@@ -63,11 +63,11 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
     let engine_kind = wavedash_config.engine_type()?;
     let engine_label = engine_kind.as_label();
 
-    let entrypoint = if matches!(engine_kind, EngineKind::Custom) {
+    let entrypoint = if matches!(engine_kind, EngineKind::Custom | EngineKind::JsDos | EngineKind::Ruffle) {
         Some(
             wavedash_config
                 .entrypoint()
-                .ok_or_else(|| anyhow::anyhow!("Custom engine configs require an entrypoint"))?
+                .ok_or_else(|| anyhow::anyhow!("Engine config requires an entrypoint"))?
                 .to_string(),
         )
     } else {
@@ -88,7 +88,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
             })?;
             Some(fetch_entrypoint_params(engine_label, html_path).await?)
         }
-        EngineKind::Custom => None,
+        EngineKind::Custom | EngineKind::JsDos | EngineKind::Ruffle => None,
     };
 
     let (rustls_config, cert_path, _key_path) = load_or_create_certificates().await?;
