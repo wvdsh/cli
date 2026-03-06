@@ -3,3 +3,7 @@
 
 ## Development
 - Environment variables are managed by Doppler. Always use `doppler run --` as a prefix when running cargo commands (build, check, clippy, run, test, etc.). For example: `doppler run -- cargo check`, `doppler run -- cargo clippy`.
+
+## Testing builds
+- Push a build: `doppler run -- cargo run -- build push -c /path/to/game/wavedash.toml`
+- Each game directory has a `wavedash.toml` config with game ID, engine settings, and upload directory
