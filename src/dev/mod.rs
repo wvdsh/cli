@@ -119,8 +119,17 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
         entrypoint_params.as_ref(),
     )?;
 
+    let file_count = std::fs::read_dir(&upload_dir)
+        .map(|entries| entries.filter(|e| e.as_ref().map(|e| e.path().is_file()).unwrap_or(false)).count())
+        .unwrap_or(0);
+
     println!("--------------------------------");
-    println!("Sandbox Link:\n{}", sandbox_url);
+    println!(" Game:    {}", wavedash_config.game_id);
+    println!(" Engine:  {} v{}", engine_label, wavedash_config.engine_version()?);
+    println!(" Serving: {} ({} files)", wavedash_config.upload_dir.display(), file_count);
+    println!();
+    println!(" Sandbox Link:");
+    println!(" {}", sandbox_url);
     println!("--------------------------------");
 
     if !no_open {
