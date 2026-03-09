@@ -52,6 +52,7 @@ async fn get_temp_credentials(
     engine: &str,
     engine_version: &str,
     entrypoint: Option<&str>,
+    entrypoint_params: Option<serde_json::Value>,
     message: Option<&str>,
     api_key: &str,
 ) -> Result<TempCredsResponse> {
@@ -68,9 +69,14 @@ async fn get_temp_credentials(
         "engineVersion": engine_version
     });
 
-    // Add entrypoint if provided
+    // Add entrypoint if provided (for custom engine)
     if let Some(ep) = entrypoint {
         request_body["entrypoint"] = serde_json::json!(ep);
+    }
+
+    // Add entrypointParams if provided (for JSDOS/Ruffle)
+    if let Some(ep_params) = entrypoint_params {
+        request_body["entrypointParams"] = ep_params;
     }
 
     // Add build message if provided
@@ -176,6 +182,7 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
         engine_kind.as_config_key(),
         wavedash_config.engine_version()?,
         wavedash_config.entrypoint(),
+        wavedash_config.executable_entrypoint_params(),
         message.as_deref(),
         &api_key,
     )
