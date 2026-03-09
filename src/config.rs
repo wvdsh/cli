@@ -105,13 +105,15 @@ pub struct CustomSection {
 #[derive(Debug, Deserialize)]
 pub struct JsDosSection {
     pub version: String,
-    pub entrypoint: String,
+    pub executable: String,
+    pub loader_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct RuffleSection {
     pub version: String,
-    pub entrypoint: String,
+    pub executable: String,
+    pub loader_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -226,7 +228,41 @@ impl WavedashConfig {
         self.custom
             .as_ref()
             .map(|c| c.entrypoint.as_str())
-            .or_else(|| self.jsdos.as_ref().map(|j| j.entrypoint.as_str()))
-            .or_else(|| self.ruffle.as_ref().map(|r| r.entrypoint.as_str()))
+    }
+
+    /// For JSDOS/Ruffle engines, returns the entrypointParams (executable + optional loader_url)
+    pub fn executable_entrypoint_params(&self) -> Option<serde_json::Value> {
+        if let Some(ref jsdos) = self.jsdos {
+            let mut params = serde_json::json!({ "executable": jsdos.executable });
+            if let Some(ref loader_url) = jsdos.loader_url {
+                params["loaderUrl"] = serde_json::json!(loader_url);
+            }
+            Some(params)
+        } else if let Some(ref ruffle) = self.ruffle {
+            let mut params = serde_json::json!({ "executable": ruffle.executable });
+            if let Some(ref loader_url) = ruffle.loader_url {
+                params["loaderUrl"] = serde_json::json!(loader_url);
+            }
+            Some(params)
+        } else {
+            None
+        }
+    }
+
+    /// For JSDOS/Ruffle engines, returns all files that must exist in upload_dir
+    pub fn executable_files_to_validate(&self) -> Vec<&str> {
+        let mut files = Vec::new();
+        if let Some(ref jsdos) = self.jsdos {
+            files.push(jsdos.executable.as_str());
+            if let Some(ref loader_url) = jsdos.loader_url {
+                files.push(loader_url.as_str());
+            }
+        } else if let Some(ref ruffle) = self.ruffle {
+            files.push(ruffle.executable.as_str());
+            if let Some(ref loader_url) = ruffle.loader_url {
+                files.push(loader_url.as_str());
+            }
+        }
+        files
     }
 }
