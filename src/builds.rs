@@ -179,7 +179,7 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
     let creds = get_temp_credentials(
         &wavedash_config.game_id,
         &wavedash_config.branch,
-        engine_kind.as_config_key(),
+        engine_kind.as_label(),
         wavedash_config.engine_version()?,
         wavedash_config.entrypoint(),
         wavedash_config.executable_entrypoint_params(),
