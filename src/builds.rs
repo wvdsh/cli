@@ -217,5 +217,8 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
     )
     .await?;
 
+    println!();
+    println!("Build ID: {}", creds.game_build_id);
+
     Ok(())
 }
