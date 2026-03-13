@@ -111,12 +111,20 @@ async fn get_temp_credentials(
     Ok(creds)
 }
 
+#[derive(Debug, Deserialize)]
+struct UploadCompleteResponse {
+    #[serde(rename = "gameSlug")]
+    game_slug: String,
+    #[serde(rename = "gameBranchSlug")]
+    game_branch_slug: String,
+}
+
 async fn notify_upload_complete(
     game_id: &str,
     branch: &str,
     build_id: &str,
     api_key: &str,
-) -> Result<()> {
+) -> Result<UploadCompleteResponse> {
     let client = config::create_http_client()?;
     let api_host = config::get("api_host")?;
 
@@ -147,7 +155,8 @@ async fn notify_upload_complete(
         anyhow::bail!("API request failed: {}", error_text);
     }
 
-    Ok(())
+    let result: UploadCompleteResponse = response.json().await?;
+    Ok(result)
 }
 
 pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Option<String>) -> Result<()> {
@@ -196,8 +205,8 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
         endpoint: creds.endpoint,
     };
 
-    // Copy necessary files to upload directory
-    let staging = FileStaging::prepare(&config_path, &upload_dir, &wavedash_config)?;
+    // Validate required files exist in upload directory
+    FileStaging::prepare(&upload_dir, &wavedash_config)?;
 
     // Initialize uploader and upload
     let uploader = R2Uploader::new(&r2_config, &creds.bucket_name)?;
@@ -205,17 +214,22 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
         .upload_directory(upload_dir.as_path(), &creds.r2_key_prefix, verbose)
         .await?;
 
-    // Clean up any temporary files
-    staging.cleanup();
-
     // Notify the server that upload is complete
-    notify_upload_complete(
+    let result = notify_upload_complete(
         &wavedash_config.game_id,
         &wavedash_config.branch,
         &creds.game_build_id,
         &api_key,
     )
     .await?;
+
+    // Print the play URL
+    let site_host = config::get("open_browser_website_host")?;
+    let play_url = format!(
+        "{}/play/{}/{}?gbid={}",
+        site_host, result.game_slug, result.game_branch_slug, creds.game_build_id
+    );
+    println!("\n▶ Play at: {}", play_url);
 
     Ok(())
 }

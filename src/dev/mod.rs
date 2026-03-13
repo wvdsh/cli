@@ -74,8 +74,8 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
         None
     };
 
-    // Copy necessary files to upload directory
-    let staging = FileStaging::prepare(&config_path, &upload_dir, &wavedash_config)?;
+    // Validate required files exist in upload directory
+    FileStaging::prepare(&upload_dir, &wavedash_config)?;
 
     let html_entrypoint = locate_html_entrypoint(&upload_dir);
     let entrypoint_params = match engine_kind {
@@ -145,9 +145,6 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
     }
 
     server.await?;
-
-    // Clean up any temporary files
-    staging.cleanup();
 
     Ok(())
 }

@@ -3,14 +3,16 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use axum_server::tls_rustls::RustlsConfig;
-use rcgen::generate_simple_self_signed;
+use rcgen::{CertificateParams, DnType};
 
 use crate::config;
 
 const DEV_CERT_SUBDIR: &str = "dev-server";
 const DEV_CERT_NAME: &str = "localhost-cert.pem";
 const DEV_KEY_NAME: &str = "localhost-key.pem";
+const DEV_CERT_VERSION_NAME: &str = "cert-version";
 const DEV_CERT_COMMON_NAME: &str = "wavedash dev server";
+const DEV_CERT_VERSION: &str = "2";
 
 #[cfg(target_os = "linux")]
 const LINUX_CERT_INSTALL_PATH: &str = "/usr/local/share/ca-certificates/wavedash-dev.crt";
@@ -21,9 +23,19 @@ pub async fn load_or_create_certificates() -> Result<(RustlsConfig, PathBuf, Pat
 
     let cert_path = cert_dir.join(DEV_CERT_NAME);
     let key_path = cert_dir.join(DEV_KEY_NAME);
+    let version_path = cert_dir.join(DEV_CERT_VERSION_NAME);
 
-    if !cert_path.exists() || !key_path.exists() {
+    let needs_regen = !cert_path.exists()
+        || !key_path.exists()
+        || fs::read_to_string(&version_path).unwrap_or_default() != DEV_CERT_VERSION;
+
+    if needs_regen {
+        // Remove old cert, key, and trust marker so everything is regenerated
+        let _ = fs::remove_file(&cert_path);
+        let _ = fs::remove_file(&key_path);
+        let _ = fs::remove_file(trust_marker_path(&cert_path));
         create_self_signed_cert(&cert_path, &key_path)?;
+        fs::write(&version_path, DEV_CERT_VERSION)?;
     }
 
     let cert_pem = fs::read(&cert_path)
@@ -41,14 +53,14 @@ pub fn ensure_cert_trusted(cert_path: &Path) -> Result<()> {
 }
 
 fn create_self_signed_cert(cert_path: &Path, key_path: &Path) -> Result<()> {
-    let subject_alt_names = vec!["localhost".to_string()];
-    let rcgen::CertifiedKey { cert, signing_key } = generate_simple_self_signed(subject_alt_names)?;
-    
-    let cert_pem = cert.pem();
-    let key_pem = signing_key.serialize_pem();
+    let mut params = CertificateParams::new(vec!["localhost".to_string()])?;
+    params.distinguished_name.push(DnType::CommonName, DEV_CERT_COMMON_NAME);
 
-    fs::write(cert_path, cert_pem)?;
-    fs::write(key_path, key_pem)?;
+    let key_pair = rcgen::KeyPair::generate()?;
+    let cert = params.self_signed(&key_pair)?;
+
+    fs::write(cert_path, cert.pem())?;
+    fs::write(key_path, key_pair.serialize_pem())?;
 
     Ok(())
 }
