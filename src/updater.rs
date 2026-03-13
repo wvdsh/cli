@@ -40,9 +40,8 @@ impl UpdateCache {
     }
 }
 
-/// Check for updates and show message if available (non-blocking)
-pub fn check_for_updates() -> std::thread::JoinHandle<()> {
-    // Show cached notification if available
+/// Show cached update notification (non-blocking, no background work)
+pub fn show_update_notification() {
     if let Some(cache) = UpdateCache::load() {
         if cache.show_notification {
             if let (Ok(current), Ok(latest)) = (
@@ -51,7 +50,6 @@ pub fn check_for_updates() -> std::thread::JoinHandle<()> {
             ) {
                 if latest > current {
                     println!("\n🎉 Update available → {}", cache.latest_version);
-                    // Always check current install method, don't rely on cached value
                     if is_homebrew() {
                         println!("Run: brew upgrade wvdsh/tap/wavedash");
                     } else {
@@ -62,8 +60,10 @@ pub fn check_for_updates() -> std::thread::JoinHandle<()> {
             }
         }
     }
+}
 
-    // Spawn background check for next run
+/// Spawn background update check for next run
+pub fn spawn_background_check() -> std::thread::JoinHandle<()> {
     std::thread::spawn(|| {
         let _ = tokio::runtime::Runtime::new()
             .map(|rt| rt.block_on(async { background_update_check().await }));

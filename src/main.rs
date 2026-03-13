@@ -89,8 +89,10 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    // Check for updates (shows cached from previous run, spawns background check for next)
-    let update_handle = updater::check_for_updates();
+    // Show cached update notification (no background work yet — spawning
+    // child processes here would deliver SIGCHLD and break interactive prompts
+    // like the certificate-trust flow in `wavedash dev`).
+    updater::show_update_notification();
 
     match cli.command {
         Commands::Auth { action } => {
@@ -158,7 +160,9 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Wait for background update check to complete
+    // Spawn background update check *after* the command finishes so that
+    // SIGCHLD from child processes cannot interrupt interactive prompts.
+    let update_handle = updater::spawn_background_check();
     let _ = update_handle.join();
 
     Ok(())
