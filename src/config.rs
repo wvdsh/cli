@@ -3,11 +3,11 @@ use directories::BaseDirs;
 use serde::Deserialize;
 use std::path::PathBuf;
 
-/// Get the wvdsh config directory (varies by environment)
-/// - Production: ~/.wvdsh
-/// - Staging: ~/.wvdsh-stg
-/// - Dev: ~/.wvdsh-dev
-pub fn wvdsh_dir() -> Result<PathBuf> {
+/// Get the wavedash config directory (varies by environment)
+/// - Production: ~/.wavedash
+/// - Staging: ~/.wavedash-stg
+/// - Dev: ~/.wavedash-dev
+pub fn wavedash_dir() -> Result<PathBuf> {
     let base_dirs = BaseDirs::new()
         .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
     Ok(base_dirs.home_dir().join(env!("CONFIG_DIR")))
@@ -51,7 +51,7 @@ pub fn get(key: &str) -> Result<String> {
 
 /// Get the path to the credentials file
 pub fn credentials_path() -> Result<PathBuf> {
-    Ok(wvdsh_dir()?.join("credentials.json"))
+    Ok(wavedash_dir()?.join("credentials.json"))
 }
 
 /// Create an HTTP client configured with Cloudflare Access headers if needed

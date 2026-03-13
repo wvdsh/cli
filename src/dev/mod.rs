@@ -39,7 +39,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
     let auth_manager = AuthManager::new()?;
     let _api_key = auth_manager
         .get_api_key()
-        .ok_or_else(|| anyhow::anyhow!("Not authenticated. Run 'wvdsh auth login' first."))?;
+        .ok_or_else(|| anyhow::anyhow!("Not authenticated. Run 'wavedash auth login' first."))?;
 
     let config_path = config_path.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
     if !config_path.exists() {

@@ -21,7 +21,7 @@ fn mask_token(token: &str) -> String {
 }
 
 #[derive(Parser)]
-#[command(name = "wvdsh")]
+#[command(name = "wavedash")]
 #[command(about = "Cross-platform CLI tool for uploading game projects to wavedash.com")]
 #[command(version)]
 struct Cli {
@@ -124,7 +124,7 @@ async fn main() -> Result<()> {
                     let auth_info = auth_manager.get_auth_info();
                     match auth_info.source {
                         AuthSource::Environment => {
-                            println!("✓ Authenticated (via WVDSH_TOKEN environment variable)");
+                            println!("✓ Authenticated (via WAVEDASH_TOKEN environment variable)");
                             if let Some(api_key) = auth_info.api_key {
                                 println!("Token: {}", mask_token(&api_key));
                             }
@@ -139,7 +139,7 @@ async fn main() -> Result<()> {
                             }
                         }
                         AuthSource::None => {
-                            println!("Not authenticated. Run 'wvdsh auth login' or set WVDSH_TOKEN environment variable.");
+                            println!("Not authenticated. Run 'wavedash auth login' or set WAVEDASH_TOKEN environment variable.");
                         }
                     }
                 }

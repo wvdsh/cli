@@ -2676,6 +2676,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "wavedash"
+version = "0.1.54"
+dependencies = [
+ "anyhow",
+ "axoupdater",
+ "axum",
+ "axum-server",
+ "chrono",
+ "clap",
+ "dialoguer",
+ "directories",
+ "dotenvy",
+ "futures",
+ "indicatif",
+ "mime_guess",
+ "open",
+ "opendal",
+ "rcgen",
+ "reqwest",
+ "rustls",
+ "semver",
+ "serde",
+ "serde_json",
+ "tiny_http",
+ "tokio",
+ "toml",
+ "tower 0.4.13",
+ "tower-http 0.5.2",
+ "url",
+ "urlencoding",
+ "walkdir",
+]
+
+[[package]]
 name = "web-sys"
 version = "0.3.83"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3118,40 +3152,6 @@ name = "writeable"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
-
-[[package]]
-name = "wvdsh"
-version = "0.1.53"
-dependencies = [
- "anyhow",
- "axoupdater",
- "axum",
- "axum-server",
- "chrono",
- "clap",
- "dialoguer",
- "directories",
- "dotenvy",
- "futures",
- "indicatif",
- "mime_guess",
- "open",
- "opendal",
- "rcgen",
- "reqwest",
- "rustls",
- "semver",
- "serde",
- "serde_json",
- "tiny_http",
- "tokio",
- "toml",
- "tower 0.4.13",
- "tower-http 0.5.2",
- "url",
- "urlencoding",
- "walkdir",
-]
 
 [[package]]
 name = "yasna"

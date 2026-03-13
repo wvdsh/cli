@@ -1,6 +1,6 @@
 [package]
-name = "wvdsh"
-version = "0.1.53"
+name = "wavedash"
+version = "0.1.54"
 edition = "2021"
 authors = ["Wavedash Team"]
 description = "Cross-platform CLI tool for uploading game projects to wavedash.com"
@@ -12,7 +12,7 @@ keywords = ["cli", "gaming", "upload", "wavedash"]
 categories = ["command-line-utilities", "games"]
 
 [[bin]]
-name = "wvdsh"
+name = "wavedash"
 path = "src/main.rs"
 
 [dependencies]

@@ -21,7 +21,7 @@ struct UpdateCache {
 
 impl UpdateCache {
     fn cache_path() -> Result<PathBuf> {
-        let cache_dir = config::wvdsh_dir()?;
+        let cache_dir = config::wavedash_dir()?;
         fs::create_dir_all(&cache_dir)?;
         Ok(cache_dir.join("update-cache.json"))
     }
@@ -53,9 +53,9 @@ pub fn check_for_updates() -> std::thread::JoinHandle<()> {
                     println!("\n🎉 Update available → {}", cache.latest_version);
                     // Always check current install method, don't rely on cached value
                     if is_homebrew() {
-                        println!("Run: brew upgrade wvdsh/tap/wvdsh");
+                        println!("Run: brew upgrade wvdsh/tap/wavedash");
                     } else {
-                        println!("Run: wvdsh update");
+                        println!("Run: wavedash update");
                     }
                     println!();
                 }
@@ -147,7 +147,7 @@ async fn pull_homebrew_tap() -> Result<()> {
 async fn check_homebrew_version(check_count: u32) -> Result<Option<(String, u32)>> {
     // Use brew info to check version of custom tap formula
     let output = tokio::process::Command::new("brew")
-        .args(["info", "--json=v2", "wvdsh/tap/wvdsh"])
+        .args(["info", "--json=v2", "wvdsh/tap/wavedash"])
         .output()
         .await?;
 
@@ -166,7 +166,7 @@ async fn check_homebrew_version(check_count: u32) -> Result<Option<(String, u32)
 pub async fn run_update() -> Result<()> {
 
     if is_homebrew() {
-        anyhow::bail!("Installed via Homebrew. Use: brew upgrade wvdsh/tap/wvdsh");
+        anyhow::bail!("Installed via Homebrew. Use: brew upgrade wvdsh/tap/wavedash");
     }
 
     // Mark notification as acknowledged

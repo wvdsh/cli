@@ -14,11 +14,11 @@ fn main() {
     // Set CONFIG_DIR based on SITE_HOST
     let site_host = std::env::var("SITE_HOST").unwrap_or_default();
     let config_dir = if site_host.contains("localhost") || site_host.contains("lvh.me") {
-        ".wvdsh-dev"
+        ".wavedash-dev"
     } else if site_host.contains("staging") {
-        ".wvdsh-stg"
+        ".wavedash-stg"
     } else {
-        ".wvdsh"
+        ".wavedash"
     };
     println!("cargo:rustc-env=CONFIG_DIR={}", config_dir);
 

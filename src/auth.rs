@@ -74,7 +74,7 @@ impl AuthManager {
 
     pub fn get_auth_info(&self) -> AuthInfo {
         // Check environment first
-        if let Ok(api_key) = std::env::var("WVDSH_TOKEN") {
+        if let Ok(api_key) = std::env::var("WAVEDASH_TOKEN") {
             if !api_key.is_empty() {
                 return AuthInfo {
                     source: AuthSource::Environment,

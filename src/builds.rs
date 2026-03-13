@@ -158,7 +158,7 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
     let auth_manager = AuthManager::new()?;
     let api_key = auth_manager
         .get_api_key()
-        .ok_or_else(|| anyhow::anyhow!("Not authenticated. Run 'wvdsh auth login' first."))?;
+        .ok_or_else(|| anyhow::anyhow!("Not authenticated. Run 'wavedash auth login' first."))?;
 
     // Resolve upload_dir relative to the config file's directory
     let config_dir = config_path
