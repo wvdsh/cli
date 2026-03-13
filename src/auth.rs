@@ -134,7 +134,7 @@ pub fn login_with_browser() -> Result<LoginResult> {
 
     let website_host = config::get("open_browser_website_host")?;
     let auth_url = format!(
-        "{}/developers/cli/auth?callback_uri={}&state={}",
+        "{}/auth/cli?callback_uri={}&state={}",
         website_host,
         urlencoding::encode(&redirect_uri),
         urlencoding::encode(&state)

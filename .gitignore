@@ -3,3 +3,4 @@ test_build
 *.code-workspace
 .env
 .claude/settings.local.json
+*.DS_Store
