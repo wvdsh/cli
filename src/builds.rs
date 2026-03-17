@@ -7,7 +7,7 @@ use std::path::PathBuf;
 #[path = "uploader.rs"]
 mod uploader;
 
-use uploader::{R2Config, R2Uploader};
+use uploader::{scan_directory, R2Config, R2Uploader};
 
 #[derive(Debug, Deserialize)]
 struct ApiErrorResponse {
@@ -54,6 +54,7 @@ async fn get_temp_credentials(
     entrypoint: Option<&str>,
     entrypoint_params: Option<serde_json::Value>,
     message: Option<&str>,
+    build_size_bytes: u64,
     api_key: &str,
 ) -> Result<TempCredsResponse> {
     let client = config::create_http_client()?;
@@ -66,7 +67,8 @@ async fn get_temp_credentials(
 
     let mut request_body = serde_json::json!({
         "engine": engine,
-        "engineVersion": engine_version
+        "engineVersion": engine_version,
+        "buildSizeBytes": build_size_bytes
     });
 
     // Add entrypoint if provided (for custom engine)
@@ -183,7 +185,16 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
         anyhow::bail!("Source must be a directory: {}", upload_dir.display());
     }
 
-    // Get temporary R2 credentials
+    // Validate required files exist in upload directory
+    FileStaging::prepare(&upload_dir, &wavedash_config)?;
+
+    // Scan directory to get file list and total size before requesting credentials
+    let (scanned_files, total_bytes) = scan_directory(&upload_dir)?;
+    if scanned_files.is_empty() {
+        anyhow::bail!("No files found in {}", upload_dir.display());
+    }
+
+    // Get temporary R2 credentials (includes build size)
     let engine_kind = wavedash_config.engine_type()?;
     let creds = get_temp_credentials(
         &wavedash_config.game_id,
@@ -193,6 +204,7 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
         wavedash_config.entrypoint(),
         wavedash_config.executable_entrypoint_params(),
         message.as_deref(),
+        total_bytes,
         &api_key,
     )
     .await?;
@@ -205,13 +217,10 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
         endpoint: creds.endpoint,
     };
 
-    // Validate required files exist in upload directory
-    FileStaging::prepare(&upload_dir, &wavedash_config)?;
-
-    // Initialize uploader and upload
+    // Initialize uploader and upload using pre-scanned files
     let uploader = R2Uploader::new(&r2_config, &creds.bucket_name)?;
     uploader
-        .upload_directory(upload_dir.as_path(), &creds.r2_key_prefix, verbose)
+        .upload_directory_from_scan(&scanned_files, total_bytes, &creds.r2_key_prefix, verbose)
         .await?;
 
     // Notify the server that upload is complete

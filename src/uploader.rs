@@ -24,6 +24,12 @@ pub struct R2Config {
 }
 
 #[derive(Debug)]
+pub struct ScannedFile {
+    pub local_path: PathBuf,
+    pub relative_path: PathBuf,
+}
+
+#[derive(Debug)]
 struct ManifestEntry {
     path: PathBuf,
     key: String,
@@ -65,27 +71,23 @@ impl R2Uploader {
         self
     }
 
-    pub async fn upload_directory(
+    pub async fn upload_directory_from_scan(
         &self,
-        source_dir: &Path,
+        scanned_files: &[ScannedFile],
+        total_bytes: u64,
         prefix: &str,
         verbose: bool,
     ) -> Result<()> {
-        let source_dir = source_dir
-            .canonicalize()
-            .with_context(|| format!("Failed to resolve {}", source_dir.display()))?;
-
-        let (manifest, total_bytes) = build_manifest(&source_dir, prefix)?;
+        let manifest = build_manifest_from_scan(scanned_files, prefix);
         if manifest.is_empty() {
-            anyhow::bail!("No files found in {}", source_dir.display());
+            anyhow::bail!("No files found to upload");
         }
 
         if verbose {
             println!(
-                "Uploading {} files ({} total) from {} to bucket '{}' with prefix '{}'",
+                "Uploading {} files ({} total) to bucket '{}' with prefix '{}'",
                 manifest.len(),
                 format_bytes(total_bytes),
-                source_dir.display(),
                 self.bucket,
                 prefix
             );
@@ -116,11 +118,15 @@ impl R2Uploader {
     }
 }
 
-fn build_manifest(source_dir: &Path, prefix: &str) -> Result<(Vec<ManifestEntry>, u64)> {
-    let mut entries = Vec::new();
+pub fn scan_directory(source_dir: &Path) -> Result<(Vec<ScannedFile>, u64)> {
+    let source_dir = source_dir
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve {}", source_dir.display()))?;
+
+    let mut files = Vec::new();
     let mut total_bytes = 0u64;
 
-    for entry in WalkDir::new(source_dir).follow_links(false) {
+    for entry in WalkDir::new(&source_dir).follow_links(false) {
         let entry = entry.with_context(|| {
             format!(
                 "Failed to walk directory while scanning {}",
@@ -138,15 +144,28 @@ fn build_manifest(source_dir: &Path, prefix: &str) -> Result<(Vec<ManifestEntry>
             .with_context(|| format!("Failed to read metadata for {}", path.display()))?;
         let file_size = metadata.len();
         let relative = path
-            .strip_prefix(source_dir)
-            .with_context(|| format!("Failed to calculate relative path for {}", path.display()))?;
-        let key = build_object_key(prefix, relative);
+            .strip_prefix(&source_dir)
+            .with_context(|| format!("Failed to calculate relative path for {}", path.display()))?
+            .to_path_buf();
 
-        entries.push(ManifestEntry { path, key });
+        files.push(ScannedFile {
+            local_path: path,
+            relative_path: relative,
+        });
         total_bytes = total_bytes.saturating_add(file_size);
     }
 
-    Ok((entries, total_bytes))
+    Ok((files, total_bytes))
+}
+
+fn build_manifest_from_scan(scanned_files: &[ScannedFile], prefix: &str) -> Vec<ManifestEntry> {
+    scanned_files
+        .iter()
+        .map(|f| ManifestEntry {
+            path: f.local_path.clone(),
+            key: build_object_key(prefix, &f.relative_path),
+        })
+        .collect()
 }
 
 fn build_object_key(prefix: &str, relative: &Path) -> String {
