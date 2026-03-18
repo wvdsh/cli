@@ -90,13 +90,16 @@ mod platform {
     mod macos {
         use super::super::{trust_marker_path, CertTrustManager, DEV_CERT_COMMON_NAME};
         use anyhow::{Context, Result};
-        use dialoguer::{Confirm, Password};
         use std::fs;
-        use std::io::Write;
         use std::path::Path;
-        use std::process::{Command, Stdio};
+        use std::process::Command;
 
         pub(crate) struct MacosCertManager;
+
+        fn login_keychain_path() -> String {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
+            format!("{}/Library/Keychains/login.keychain-db", home)
+        }
 
         impl CertTrustManager for MacosCertManager {
             fn ensure_trusted(cert_path: &Path) -> Result<()> {
@@ -120,52 +123,18 @@ mod platform {
                     let _ = fs::remove_file(&marker);
                 }
 
-                println!(
-                    "⚠️  macOS needs to trust the generated localhost certificate for HTTPS previews."
-                );
-                if !Confirm::new()
-                    .with_prompt("Add the certificate to the System keychain now?")
-                    .default(true)
-                    .interact()?
-                {
-                    println!(
-                        "Skipping trust step. You can trust {} manually later (security add-trusted-cert ...).",
-                        cert_path.display()
-                    );
-                    return Ok(());
-                }
+                println!("Installing dev certificate into macOS login keychain...");
 
-                let password = Password::new()
-                    .with_prompt("Enter your macOS password (used for sudo)")
-                    .allow_empty_password(false)
-                    .interact()?;
-
-                let mut child = Command::new("sudo")
-                    .arg("-S")
-                    .arg("security")
+                let output = Command::new("security")
                     .arg("add-trusted-cert")
-                    .arg("-d")
                     .arg("-r")
                     .arg("trustRoot")
                     .arg("-k")
-                    .arg("/Library/Keychains/System.keychain")
+                    .arg(login_keychain_path())
                     .arg(cert_path)
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .context("Failed to spawn sudo security command")?;
+                    .output()
+                    .context("Failed to run security add-trusted-cert")?;
 
-                {
-                    let stdin = child
-                        .stdin
-                        .as_mut()
-                        .context("Failed to open sudo stdin for password")?;
-                    stdin.write_all(password.as_bytes())?;
-                    stdin.write_all(b"\n")?;
-                }
-
-                let output = child.wait_with_output()?;
                 if !output.status.success() {
                     anyhow::bail!(
                         "Failed to trust certificate: {}",
@@ -174,7 +143,7 @@ mod platform {
                 }
 
                 fs::write(&marker, b"trusted")?;
-                println!("✓ Trusted dev certificate in the macOS System keychain.");
+                println!("✓ Trusted dev certificate in the macOS login keychain.");
                 Ok(())
             }
         }
@@ -184,7 +153,7 @@ mod platform {
                 .arg("find-certificate")
                 .arg("-c")
                 .arg(common_name)
-                .arg("/Library/Keychains/System.keychain")
+                .arg(login_keychain_path())
                 .output()
                 .context("failed to run security find-certificate")?;
 
