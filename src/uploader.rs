@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -33,6 +34,73 @@ pub struct ScannedFile {
 struct ManifestEntry {
     path: PathBuf,
     key: String,
+}
+
+/// Reports upload progress either as an animated TTY progress bar (for humans)
+/// or as plain-text percentage lines (for piped/LLM consumers).
+struct ProgressReporter {
+    tty_bar: Option<ProgressBar>,
+    total_bytes: u64,
+    last_percent: AtomicU64,
+}
+
+impl ProgressReporter {
+    fn new(total_bytes: u64) -> Self {
+        if std::io::stderr().is_terminal() {
+            let pb = ProgressBar::new(total_bytes);
+            pb.set_style(
+                ProgressStyle::with_template("[{bar:40.cyan/blue}] {percent:>3}% {msg}")
+                    .unwrap()
+                    .progress_chars("=>-"),
+            );
+            pb.set_message(format!("0 B / {}", format_bytes(total_bytes)));
+            pb.enable_steady_tick(Duration::from_millis(100));
+            Self {
+                tty_bar: Some(pb),
+                total_bytes,
+                last_percent: AtomicU64::new(0),
+            }
+        } else {
+            println!("Uploading: 0% (0 B / {})", format_bytes(total_bytes));
+            Self {
+                tty_bar: None,
+                total_bytes,
+                last_percent: AtomicU64::new(0),
+            }
+        }
+    }
+
+    fn update(&self, uploaded_bytes: u64) {
+        let clamped = uploaded_bytes.min(self.total_bytes);
+        if let Some(pb) = &self.tty_bar {
+            pb.set_position(clamped);
+            pb.set_message(format!(
+                "{} / {}",
+                format_bytes(clamped),
+                format_bytes(self.total_bytes),
+            ));
+        } else if self.total_bytes > 0 {
+            let percent = ((clamped as f64 / self.total_bytes as f64) * 100.0) as u64;
+            let percent = percent.min(100);
+            let prev = self.last_percent.fetch_max(percent, Ordering::Relaxed);
+            if percent > prev {
+                println!(
+                    "Uploading: {}% ({} / {})",
+                    percent,
+                    format_bytes(clamped),
+                    format_bytes(self.total_bytes),
+                );
+            }
+        }
+    }
+
+    fn finish(&self) {
+        if let Some(pb) = &self.tty_bar {
+            pb.finish_with_message("✓ Build uploaded successfully!");
+        } else {
+            println!("Build uploaded successfully.");
+        }
+    }
 }
 
 pub struct R2Uploader {
@@ -93,7 +161,7 @@ impl R2Uploader {
             );
         }
 
-        let pb = create_progress_bar(total_bytes);
+        let progress = Arc::new(ProgressReporter::new(total_bytes));
         let uploaded_bytes = Arc::new(AtomicU64::new(0));
         let total_bytes = total_bytes;
         let operator = self.operator.clone();
@@ -101,11 +169,11 @@ impl R2Uploader {
 
         stream::iter(manifest.into_iter().map(|entry| {
             let operator = operator.clone();
-            let pb = pb.clone();
+            let progress = progress.clone();
             let uploaded_bytes = uploaded_bytes.clone();
 
             async move {
-                upload_file(&operator, &entry, &pb, &uploaded_bytes, total_bytes).await?;
+                upload_file(&operator, &entry, &progress, &uploaded_bytes, total_bytes).await?;
                 Ok::<(), anyhow::Error>(())
             }
         }))
@@ -113,7 +181,7 @@ impl R2Uploader {
         .try_collect::<Vec<_>>()
         .await?;
 
-        pb.finish_with_message("✓ Build uploaded successfully!");
+        progress.finish();
         Ok(())
     }
 }
@@ -189,7 +257,7 @@ fn build_object_key(prefix: &str, relative: &Path) -> String {
 async fn upload_file(
     operator: &Operator,
     entry: &ManifestEntry,
-    pb: &ProgressBar,
+    progress: &ProgressReporter,
     uploaded_bytes: &Arc<AtomicU64>,
     total_bytes: u64,
 ) -> Result<()> {
@@ -221,12 +289,7 @@ async fn upload_file(
         let new_total =
             uploaded_bytes.fetch_add(bytes_read as u64, Ordering::Relaxed) + bytes_read as u64;
         let clamped = new_total.min(total_bytes);
-        pb.set_position(clamped);
-        pb.set_message(format!(
-            "{} / {}",
-            format_bytes(clamped),
-            format_bytes(total_bytes)
-        ));
+        progress.update(clamped);
     }
 
     writer
@@ -234,18 +297,6 @@ async fn upload_file(
         .await
         .with_context(|| format!("Failed to finalize {}", entry.key))?;
     Ok(())
-}
-
-fn create_progress_bar(total_bytes: u64) -> ProgressBar {
-    let pb = ProgressBar::new(total_bytes);
-    pb.set_style(
-        ProgressStyle::with_template("[{bar:40.cyan/blue}] {percent:>3}% {msg}")
-            .unwrap()
-            .progress_chars("=>-"),
-    );
-    pb.set_message(format!("0 B / {}", format_bytes(total_bytes)));
-    pb.enable_steady_tick(Duration::from_millis(100));
-    pb
 }
 
 fn format_bytes(bytes: u64) -> String {
