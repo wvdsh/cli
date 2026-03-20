@@ -119,7 +119,6 @@ pub struct RuffleSection {
 #[derive(Debug, Deserialize)]
 pub struct WavedashConfig {
     pub game_id: String,
-    pub branch: String,
     pub upload_dir: PathBuf,
 
     #[serde(rename = "godot")]

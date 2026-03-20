@@ -48,7 +48,6 @@ struct TempCredsResponse {
 
 async fn get_temp_credentials(
     game_id: &str,
-    branch: &str,
     engine: &str,
     engine_version: &str,
     entrypoint: Option<&str>,
@@ -61,8 +60,8 @@ async fn get_temp_credentials(
     let api_host = config::get("api_host")?;
 
     let url = format!(
-        "{}/api/games/{}/branches/{}/builds/create-temp-r2-creds",
-        api_host, game_id, branch
+        "{}/api/games/{}/builds/create-temp-r2-creds",
+        api_host, game_id
     );
 
     let mut request_body = serde_json::json!({
@@ -117,13 +116,10 @@ async fn get_temp_credentials(
 struct UploadCompleteResponse {
     #[serde(rename = "gameSlug")]
     game_slug: String,
-    #[serde(rename = "gameBranchSlug")]
-    game_branch_slug: String,
 }
 
 async fn notify_upload_complete(
     game_id: &str,
-    branch: &str,
     build_id: &str,
     api_key: &str,
 ) -> Result<UploadCompleteResponse> {
@@ -131,8 +127,8 @@ async fn notify_upload_complete(
     let api_host = config::get("api_host")?;
 
     let url = format!(
-        "{}/api/games/{}/branches/{}/builds/{}/upload-completed",
-        api_host, game_id, branch, build_id
+        "{}/api/games/{}/builds/{}/upload-completed",
+        api_host, game_id, build_id
     );
 
     let response = client
@@ -198,7 +194,6 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
     let engine_kind = wavedash_config.engine_type()?;
     let creds = get_temp_credentials(
         &wavedash_config.game_id,
-        &wavedash_config.branch,
         engine_kind.as_config_key(),
         wavedash_config.engine_version()?,
         wavedash_config.entrypoint(),
@@ -226,7 +221,6 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
     // Notify the server that upload is complete
     let result = notify_upload_complete(
         &wavedash_config.game_id,
-        &wavedash_config.branch,
         &creds.game_build_id,
         &api_key,
     )
@@ -235,8 +229,8 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
     // Print the play URL
     let site_host = config::get("open_browser_website_host")?;
     let play_url = format!(
-        "{}/play/{}/{}?gbid={}",
-        site_host, result.game_slug, result.game_branch_slug, creds.game_build_id
+        "{}/play/{}?gbid={}",
+        site_host, result.game_slug, creds.game_build_id
     );
     println!("\n▶ Play at: {}", play_url);
 
