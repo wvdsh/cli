@@ -229,7 +229,7 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
     // Print the play URL
     let site_host = config::get("open_browser_website_host")?;
     let play_url = format!(
-        "{}/play/{}?gbid={}",
+        "{}/playtest/{}/{}",
         site_host, result.game_slug, creds.game_build_id
     );
     println!("\n▶ Play at: {}", play_url);
