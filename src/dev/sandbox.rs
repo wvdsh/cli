@@ -18,7 +18,7 @@ pub fn build_sandbox_url(
     let base = host.trim_end_matches('/');
 
     // Build the game URL (what will be the rdurl parameter)
-    let game_url_full = format!("{}/play/local/{}", base, wavedash_config.game_id);
+    let game_url_full = format!("{}/playtest/local/{}", base, wavedash_config.game_id);
     let mut game_url = Url::parse(&game_url_full)
         .with_context(|| format!("Unable to parse website host {}", game_url_full))?;
 
