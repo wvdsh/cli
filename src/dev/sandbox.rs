@@ -1,41 +1,26 @@
 use anyhow::{Context, Result};
-use serde_json::Value;
 use url::Url;
 
-use crate::config::{self, WavedashConfig};
+use crate::config;
 
 use super::url_params::UrlParams;
 
 pub fn build_sandbox_url(
-    wavedash_config: &WavedashConfig,
-    engine_label: &str,
-    engine_version: &str,
+    game_slug: &str,
+    build_uuid: &str,
     local_origin: &str,
-    entrypoint: Option<&str>,
-    entrypoint_params: Option<&Value>,
 ) -> Result<Url> {
     let host = config::get("open_browser_website_host")?;
     let base = host.trim_end_matches('/');
 
     // Build the game URL (what will be the rdurl parameter)
-    let game_url_full = format!("{}/playtest/local/{}", base, wavedash_config.game_id);
+    let game_url_full = format!("{}/playtest/{}/{}", base, game_slug, build_uuid);
     let mut game_url = Url::parse(&game_url_full)
         .with_context(|| format!("Unable to parse website host {}", game_url_full))?;
 
     {
         let mut pairs = game_url.query_pairs_mut();
         pairs.append_pair(UrlParams::LOCAL_ORIGIN, local_origin);
-        pairs.append_pair(UrlParams::ENGINE, engine_label);
-        pairs.append_pair(UrlParams::ENGINE_VERSION, engine_version);
-
-        if let Some(entrypoint) = entrypoint {
-            pairs.append_pair(UrlParams::ENTRYPOINT, entrypoint);
-        }
-
-        if let Some(params) = entrypoint_params {
-            let serialized = serde_json::to_string(params)?;
-            pairs.append_pair(UrlParams::ENTRYPOINT_PARAMS, &serialized);
-        }
     }
 
     // Build the permission-grant URL on the subdomain
@@ -49,7 +34,7 @@ pub fn build_sandbox_url(
         .host_str()
         .ok_or_else(|| anyhow::anyhow!("Could not extract host"))?;
 
-    let subdomain = format!("{}.local.{}", wavedash_config.game_id, main_host);
+    let subdomain = format!("{}.local.{}", game_slug, main_host);
     let permission_grant_url = format!("https://{}/local/permission-grant", subdomain);
 
     let mut url = Url::parse(&permission_grant_url)?;

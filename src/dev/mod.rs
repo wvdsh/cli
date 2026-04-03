@@ -11,6 +11,7 @@ use axum::{
 };
 use axum_server::{self, Handle};
 use mime_guess::from_path;
+use serde::Deserialize;
 use tokio::signal;
 use tower::ServiceBuilder;
 use tower_http::{
@@ -20,7 +21,7 @@ use tower_http::{
 use url::Url;
 
 use crate::auth::AuthManager;
-use crate::config::{EngineKind, WavedashConfig};
+use crate::config::{self, EngineKind, WavedashConfig};
 use crate::file_staging::FileStaging;
 
 mod cert;
@@ -32,12 +33,65 @@ use cert::{ensure_cert_trusted, load_or_create_certificates};
 use entrypoint::{fetch_entrypoint_params, locate_html_entrypoint};
 use sandbox::build_sandbox_url;
 
+#[derive(Debug, Deserialize)]
+struct CreateLocalBuildResponse {
+    uuid: String,
+    #[serde(rename = "gameSlug")]
+    game_slug: String,
+}
+
+async fn create_local_build(
+    game_id: &str,
+    engine: &str,
+    engine_version: &str,
+    entrypoint: Option<&str>,
+    entrypoint_params: Option<&serde_json::Value>,
+    api_key: &str,
+) -> Result<CreateLocalBuildResponse> {
+    let client = config::create_http_client()?;
+    let api_host = config::get("api_host")?;
+
+    let url = format!(
+        "{}/api/games/{}/builds/create-local",
+        api_host, game_id
+    );
+
+    let mut request_body = serde_json::json!({
+        "engine": engine,
+        "engineVersion": engine_version
+    });
+
+    if let Some(ep) = entrypoint {
+        request_body["entrypoint"] = serde_json::json!(ep);
+    }
+
+    if let Some(ep_params) = entrypoint_params {
+        request_body["entrypointParams"] = ep_params.clone();
+    }
+
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&request_body)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let error_text = response.text().await?;
+        anyhow::bail!("Failed to create local build: {}", error_text);
+    }
+
+    let result: CreateLocalBuildResponse = response.json().await?;
+    Ok(result)
+}
+
 const DEFAULT_CONFIG: &str = "./wavedash.toml";
 
 pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bool) -> Result<()> {
     // Check authentication
     let auth_manager = AuthManager::new()?;
-    let _api_key = auth_manager
+    let api_key = auth_manager
         .get_api_key()
         .ok_or_else(|| anyhow::anyhow!("Not authenticated. Run 'wavedash auth login' first."))?;
 
@@ -111,13 +165,21 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
     let (listener, socket_addr) = bind_ephemeral_listener()?;
     let local_origin = format!("https://localhost:{}", socket_addr.port());
 
-    let sandbox_url = build_sandbox_url(
-        &wavedash_config,
+    // Create a new local build via the API
+    println!("Creating local build...");
+    let local_build = create_local_build(
+        &wavedash_config.game_id,
         engine_label,
         wavedash_config.engine_version()?,
-        &local_origin,
         entrypoint.as_deref(),
         entrypoint_params.as_ref(),
+        &api_key,
+    ).await?;
+
+    let sandbox_url = build_sandbox_url(
+        &local_build.game_slug,
+        &local_build.uuid,
+        &local_origin,
     )?;
 
     println!("--------------------------------");
