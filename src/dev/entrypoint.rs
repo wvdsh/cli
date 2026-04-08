@@ -48,8 +48,12 @@ pub async fn fetch_entrypoint_params(engine: &str, engine_version: &str, html_pa
 
     let client = config::create_http_client()?;
     let response = client
-        .get(&endpoint)
-        .query(&[("engine", engine), ("engineVersion", engine_version), ("htmlContent", html_content.as_str())])
+        .post(&endpoint)
+        .json(&serde_json::json!({
+            "engine": engine,
+            "engineVersion": engine_version,
+            "htmlContent": html_content,
+        }))
         .send()
         .await
         .with_context(|| "Failed to call CLI entrypoint params endpoint")?;
