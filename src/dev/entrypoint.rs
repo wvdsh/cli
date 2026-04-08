@@ -37,7 +37,7 @@ pub fn locate_html_entrypoint(upload_dir: &Path) -> Option<PathBuf> {
     None
 }
 
-pub async fn fetch_entrypoint_params(engine: &str, html_path: &Path) -> Result<Value> {
+pub async fn fetch_entrypoint_params(engine: &str, engine_version: &str, html_path: &Path) -> Result<Value> {
     let html_content = fs::read_to_string(html_path)
         .with_context(|| format!("Failed to read {}", html_path.display()))?;
     let api_host = config::get("api_host")?;
@@ -48,8 +48,12 @@ pub async fn fetch_entrypoint_params(engine: &str, html_path: &Path) -> Result<V
 
     let client = config::create_http_client()?;
     let response = client
-        .get(&endpoint)
-        .query(&[("engine", engine), ("htmlContent", html_content.as_str())])
+        .post(&endpoint)
+        .json(&serde_json::json!({
+            "engine": engine,
+            "engineVersion": engine_version,
+            "htmlContent": html_content,
+        }))
         .send()
         .await
         .with_context(|| "Failed to call CLI entrypoint params endpoint")?;
