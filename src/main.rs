@@ -9,6 +9,7 @@ use anyhow::Result;
 use auth::{login_with_browser, AuthManager, AuthSource};
 use builds::handle_build_push;
 use clap::{Parser, Subcommand};
+use colored::Colorize;
 use dev::handle_dev;
 use std::path::PathBuf;
 
@@ -81,12 +82,19 @@ enum BuildCommands {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
     // Install rustls crypto provider for TLS
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
+    if let Err(e) = run().await {
+        eprintln!("{} {:#}", "Error:".red().bold(), e);
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     // Show cached update notification (no background work yet — spawning

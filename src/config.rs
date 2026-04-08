@@ -87,8 +87,27 @@ pub fn create_http_client() -> Result<reqwest::Client> {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(from = "GodotSectionRaw")]
 pub struct GodotSection {
+    /// Always ends with `-stable` (e.g., "4.5" in TOML becomes "4.5-stable")
     pub version: String,
+}
+
+#[derive(Deserialize)]
+struct GodotSectionRaw {
+    version: String,
+}
+
+impl From<GodotSectionRaw> for GodotSection {
+    fn from(raw: GodotSectionRaw) -> Self {
+        GodotSection {
+            version: if raw.version.ends_with("-stable") {
+                raw.version
+            } else {
+                format!("{}-stable", raw.version)
+            },
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,6 +1,6 @@
 [package]
 name = "wavedash"
-version = "0.1.62"
+version = "0.1.63"
 edition = "2021"
 authors = ["Wavedash Team"]
 description = "Cross-platform CLI tool for uploading game projects to wavedash.com"
@@ -43,6 +43,7 @@ anyhow = "1.0"
 
 # Progress & UI
 indicatif = "0.17"
+colored = "3"
 
 # Cross-platform paths
 directories = "5.0"

@@ -132,6 +132,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
     FileStaging::prepare(&upload_dir, &wavedash_config)?;
 
     let html_entrypoint = locate_html_entrypoint(&upload_dir);
+    let engine_version = wavedash_config.engine_version()?;
     let entrypoint_params = match engine_kind {
         EngineKind::Godot | EngineKind::Unity => {
             let html_path = html_entrypoint.as_deref().ok_or_else(|| {
@@ -140,7 +141,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
                     engine_label
                 )
             })?;
-            Some(fetch_entrypoint_params(engine_label, html_path).await?)
+            Some(fetch_entrypoint_params(engine_label, engine_version, html_path).await?)
         }
         EngineKind::JsDos | EngineKind::Ruffle => wavedash_config.executable_entrypoint_params(),
         EngineKind::Custom => None,
@@ -165,12 +166,10 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
     let (listener, socket_addr) = bind_ephemeral_listener()?;
     let local_origin = format!("https://localhost:{}", socket_addr.port());
 
-    // Create a new local build via the API
-    println!("Creating local build...");
     let local_build = create_local_build(
         &wavedash_config.game_id,
         engine_label,
-        wavedash_config.engine_version()?,
+        engine_version,
         entrypoint.as_deref(),
         entrypoint_params.as_ref(),
         &api_key,
