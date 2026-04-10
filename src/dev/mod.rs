@@ -176,6 +176,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
     ).await?;
 
     let sandbox_url = build_sandbox_url(
+        &wavedash_config.game_id,
         &local_build.game_slug,
         &local_build.uuid,
         &local_origin,
