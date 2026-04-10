@@ -6,6 +6,7 @@ use crate::config;
 use super::url_params::UrlParams;
 
 pub fn build_sandbox_url(
+    game_id: &str,
     game_slug: &str,
     build_uuid: &str,
     local_origin: &str,
@@ -34,7 +35,8 @@ pub fn build_sandbox_url(
         .host_str()
         .ok_or_else(|| anyhow::anyhow!("Could not extract host"))?;
 
-    let subdomain = format!("{}.local.{}", game_slug, main_host);
+    // Use game_id (not game_slug) to match the origin used by GameRunnerComponent
+    let subdomain = format!("{}.local.{}", game_id, main_host);
     let permission_grant_url = format!("https://{}/local/permission-grant", subdomain);
 
     let mut url = Url::parse(&permission_grant_url)?;
