@@ -1,37 +1,20 @@
 use std::env;
-use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
-use axum::{
-    http::{Method, StatusCode},
-    middleware,
-    routing::{get_service, head},
-    Router,
-};
-use axum_server::{self, Handle};
-use mime_guess::from_path;
+use anyhow::Result;
+use futures::StreamExt;
 use serde::Deserialize;
 use tokio::signal;
-use tower::ServiceBuilder;
-use tower_http::{
-    cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
-    services::ServeDir,
-};
-use url::Url;
 
 use crate::auth::AuthManager;
 use crate::config::{self, EngineKind, WavedashConfig};
 use crate::file_staging::FileStaging;
 
-mod cert;
+mod browser;
 mod entrypoint;
-mod sandbox;
-mod url_params;
+mod interceptor;
 
-use cert::{ensure_cert_trusted, load_or_create_certificates};
 use entrypoint::{fetch_entrypoint_params, locate_html_entrypoint};
-use sandbox::build_sandbox_url;
 
 #[derive(Debug, Deserialize)]
 struct CreateLocalBuildResponse {
@@ -88,7 +71,11 @@ async fn create_local_build(
 
 const DEFAULT_CONFIG: &str = "./wavedash.toml";
 
-pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bool) -> Result<()> {
+/// Virtual origin for the LNA connection test. No real server listens here —
+/// CDP intercepts the HEAD request and returns 200 OK.
+const VIRTUAL_LOCAL_ORIGIN: &str = "https://localhost:1";
+
+pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, _no_open: bool) -> Result<()> {
     // Check authentication
     let auth_manager = AuthManager::new()?;
     let api_key = auth_manager
@@ -142,28 +129,9 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
             })?;
             Some(fetch_entrypoint_params(engine_label, html_path).await?)
         }
-        EngineKind::JsDos | EngineKind::Ruffle => wavedash_config.executable_entrypoint_params(),
         EngineKind::Custom => None,
+        EngineKind::JsDos | EngineKind::Ruffle => wavedash_config.executable_entrypoint_params(),
     };
-
-    let (rustls_config, cert_path, _key_path) = load_or_create_certificates().await?;
-    ensure_cert_trusted(&cert_path)?;
-
-    let cors_layer = build_cors_layer()?;
-
-    let serve_dir = ServeDir::new(upload_dir.clone()).append_index_html_on_directories(true);
-
-    let app = Router::new()
-        .route("/", head(|| async { StatusCode::OK }))
-        .fallback_service(get_service(serve_dir))
-        .layer(
-            ServiceBuilder::new()
-                .layer(cors_layer)
-                .layer(middleware::from_fn(log_and_add_corp_headers)),
-        );
-
-    let (listener, socket_addr) = bind_ephemeral_listener()?;
-    let local_origin = format!("https://localhost:{}", socket_addr.port());
 
     // Create a new local build via the API
     println!("Creating local build...");
@@ -174,40 +142,71 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
         entrypoint.as_deref(),
         entrypoint_params.as_ref(),
         &api_key,
-    ).await?;
+    )
+    .await?;
 
-    let sandbox_url = build_sandbox_url(
-        &local_build.game_slug,
-        &local_build.uuid,
-        &local_origin,
-    )?;
+    // Ensure Chrome for Testing is downloaded
+    let chrome_path = browser::ensure_chrome_installed().await?;
 
-    println!("--------------------------------");
-    println!("Sandbox Link:\n{}", sandbox_url);
-    println!("--------------------------------");
+    // Launch Chrome
+    println!("Launching Chrome...");
+    let (mut chrome_browser, mut handler) = browser::launch_chrome(&chrome_path).await?;
 
-    if !no_open {
-        if let Err(e) = open::that(sandbox_url.as_str()) {
-            eprintln!("Failed to open browser: {}", e);
-        }
-    }
-
-    let handle = Handle::new();
-    let shutdown_handle = handle.clone();
-    tokio::spawn(async move {
-        shutdown_signal().await;
-        shutdown_handle.shutdown();
+    // Spawn the CDP handler loop (required for chromiumoxide to process events)
+    let handler_task = tokio::spawn(async move {
+        while handler.next().await.is_some() {}
     });
 
-    let server = axum_server::from_tcp_rustls(listener, rustls_config)
-        .handle(handle)
-        .serve(app.into_make_service());
+    // Open a page and set up request interception
+    let page = chrome_browser
+        .new_page("about:blank")
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create browser page: {e}"))?;
+
+    let site_host = config::get("open_browser_website_host")?;
+    let mainsite_host = site_host
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let game_subdomain = format!(
+        "{}.local.{}",
+        local_build.game_slug, mainsite_host
+    );
+
+    interceptor::setup_interception(
+        &page,
+        &upload_dir,
+        VIRTUAL_LOCAL_ORIGIN,
+        &game_subdomain,
+    )
+    .await?;
+
+    // Build playtest URL — navigate directly (skip permission-grant redirect)
+    let playtest_url = format!(
+        "{}/playtest/{}/{}?localorigin={}",
+        site_host,
+        local_build.game_slug,
+        local_build.uuid,
+        urlencoding::encode(VIRTUAL_LOCAL_ORIGIN),
+    );
+
+    page.goto(&playtest_url)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to navigate to playtest page: {e}"))?;
+
+    println!("--------------------------------");
+    println!("Game running at:\n{}", playtest_url);
+    println!("--------------------------------");
 
     if verbose {
-        println!("Verbose logging enabled. Awaiting requests...");
+        println!("Verbose logging enabled. CDP interception active.");
     }
 
-    server.await?;
+    // Wait for Ctrl+C
+    shutdown_signal().await;
+
+    // Clean shutdown
+    let _ = chrome_browser.close().await;
+    handler_task.abort();
 
     Ok(())
 }
@@ -222,115 +221,8 @@ fn config_parent_dir(config_path: &PathBuf) -> Result<PathBuf> {
     Ok(env::current_dir()?)
 }
 
-fn build_cors_layer() -> Result<CorsLayer> {
-    let allowed_domains = vec![
-        "wavedash.com".to_string(),
-        "staging.wavedash.gg".to_string(),
-        "wavedash.lvh.me".to_string(),
-    ];
-    Ok(CorsLayer::new()
-        .allow_credentials(true)
-        .allow_methods(AllowMethods::list(vec![
-            Method::GET,
-            Method::POST,
-            Method::HEAD,
-            Method::OPTIONS,
-        ]))
-        .allow_headers(AllowHeaders::mirror_request())
-        .allow_origin(AllowOrigin::predicate(move |origin, _| {
-            origin
-                .to_str()
-                .ok()
-                .and_then(|origin_str| Url::parse(origin_str).ok())
-                .and_then(|url| url.host_str().map(|host| host.to_string()))
-                .map(|host| host_allowed(&host, &allowed_domains))
-                .unwrap_or(false)
-        })))
-}
-
-fn host_allowed(host: &str, allowed_domains: &[String]) -> bool {
-    allowed_domains
-        .iter()
-        .any(|domain| host_matches_domain(host, domain))
-}
-
-fn host_matches_domain(host: &str, domain: &str) -> bool {
-    if host == domain {
-        return true;
-    }
-
-    host.strip_suffix(domain)
-        .map_or(false, |prefix| prefix.ends_with('.'))
-}
-
-async fn log_and_add_corp_headers(
-    req: axum::extract::Request,
-    next: middleware::Next,
-) -> axum::response::Response {
-    let method = req.method().clone();
-    let uri = req.uri().clone();
-    let path = uri.path();
-
-    let mut response = next.run(req).await;
-
-    println!("{} {} {}", method, uri, response.status());
-
-    response.headers_mut().insert(
-        "Cross-Origin-Resource-Policy",
-        "cross-origin".parse().unwrap(),
-    );
-
-    // Required for Chrome 142+ Local Network Access when service workers
-    // from public websites (or cross-origin iframes) fetch from localhost
-    response.headers_mut().insert(
-        "Access-Control-Allow-Private-Network",
-        "true".parse().unwrap(),
-    );
-
-    // Handle compressed files: add Content-Encoding and fix Content-Type
-    let compression_map = [(".gz", "gzip"), (".br", "br")];
-
-    for (suffix, encoding) in compression_map {
-        if path.ends_with(suffix) {
-            // Add Content-Encoding header
-            response
-                .headers_mut()
-                .insert("Content-Encoding", encoding.parse().unwrap());
-
-            // Fix Content-Type based on the actual file type (without compression extension)
-            if let Some(stripped_path) = path.strip_suffix(suffix) {
-                // Use mime_guess on the path without compression extension
-                // Fallback to octet-stream if mime type cannot be determined
-                let mime_type = from_path(stripped_path)
-                    .first()
-                    .map(|m| m.to_string())
-                    .unwrap_or_else(|| "application/octet-stream".to_string());
-
-                response
-                    .headers_mut()
-                    .insert("Content-Type", mime_type.parse().unwrap());
-            }
-            break;
-        }
-    }
-
-    response
-}
-
-fn bind_ephemeral_listener() -> Result<(StdTcpListener, SocketAddr)> {
-    let listener = StdTcpListener::bind(("127.0.0.1", 0))
-        .context("Unable to bind to localhost")?;
-    let addr = listener
-        .local_addr()
-        .context("Failed to read bound socket address")?;
-    listener
-        .set_nonblocking(true)
-        .context("Failed to mark listener as non-blocking")?;
-    Ok((listener, addr))
-}
-
 async fn shutdown_signal() {
     if signal::ctrl_c().await.is_ok() {
-        println!("\nReceived Ctrl+C, shutting down dev server...");
+        println!("\nReceived Ctrl+C, shutting down...");
     }
 }

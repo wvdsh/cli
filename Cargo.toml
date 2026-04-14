@@ -65,6 +65,11 @@ axoupdater = "0.9"
 semver = "1.0"
 chrono = "0.4"
 
+# Browser automation (CDP)
+chromiumoxide = { version = "0.9", default-features = false }
+base64 = "0.22"
+zip = "2"
+
 
 
 

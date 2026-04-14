@@ -99,7 +99,7 @@ pub struct UnitySection {
 #[derive(Debug, Deserialize)]
 pub struct CustomSection {
     pub version: String,
-    pub entrypoint: String,
+    pub entrypoint: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -226,7 +226,7 @@ impl WavedashConfig {
     pub fn entrypoint(&self) -> Option<&str> {
         self.custom
             .as_ref()
-            .map(|c| c.entrypoint.as_str())
+            .map(|c| c.entrypoint.as_deref().unwrap_or("index.html"))
     }
 
     /// For JSDOS/Ruffle engines, returns the entrypointParams (executable + optional loader_url)
