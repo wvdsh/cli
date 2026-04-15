@@ -114,6 +114,7 @@ pub struct RuffleSection {
 pub struct WavedashConfig {
     pub game_id: String,
     pub upload_dir: PathBuf,
+    pub entrypoint: Option<String>,
 
     #[serde(rename = "godot")]
     pub godot: Option<GodotSection>,
@@ -197,10 +198,15 @@ impl WavedashConfig {
         }
     }
 
-    /// Returns the entrypoint when no engine block is present (defaults to "index.html").
+    /// Returns the entrypoint when no engine block is present.
+    /// Uses the user-specified value from the config, or defaults to "index.html".
     pub fn entrypoint(&self) -> Option<&str> {
         match self.engine_type() {
-            Ok(None) => Some("index.html"),
+            Ok(None) => Some(
+                self.entrypoint
+                    .as_deref()
+                    .unwrap_or("index.html"),
+            ),
             _ => None,
         }
     }
