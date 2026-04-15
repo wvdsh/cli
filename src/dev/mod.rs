@@ -42,8 +42,8 @@ struct CreateLocalBuildResponse {
 
 async fn create_local_build(
     game_id: &str,
-    engine: &str,
-    engine_version: &str,
+    engine: Option<&str>,
+    engine_version: Option<&str>,
     entrypoint: Option<&str>,
     entrypoint_params: Option<&serde_json::Value>,
     api_key: &str,
@@ -56,10 +56,15 @@ async fn create_local_build(
         api_host, game_id
     );
 
-    let mut request_body = serde_json::json!({
-        "engine": engine,
-        "engineVersion": engine_version
-    });
+    let mut request_body = serde_json::json!({});
+
+    if let Some(eng) = engine {
+        request_body["engine"] = serde_json::json!(eng);
+    }
+
+    if let Some(ver) = engine_version {
+        request_body["engineVersion"] = serde_json::json!(ver);
+    }
 
     if let Some(ep) = entrypoint {
         request_body["entrypoint"] = serde_json::json!(ep);
@@ -115,36 +120,32 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
     }
 
     let engine_kind = wavedash_config.engine_type()?;
-    let engine_label = engine_kind.as_label();
 
-    let entrypoint = if matches!(engine_kind, EngineKind::Custom) {
-        Some(
-            wavedash_config
-                .entrypoint()
-                .ok_or_else(|| anyhow::anyhow!("Engine config requires an entrypoint"))?
-                .to_string(),
-        )
-    } else {
-        None
-    };
+    let entrypoint = wavedash_config.entrypoint().map(|s| s.to_string());
 
     // Validate required files exist in upload directory
     FileStaging::prepare(&upload_dir, &wavedash_config)?;
 
     let html_entrypoint = locate_html_entrypoint(&upload_dir);
-    let engine_version = wavedash_config.engine_version()?;
+    let engine_version = wavedash_config.engine_version();
     let entrypoint_params = match engine_kind {
-        EngineKind::Godot | EngineKind::Unity => {
+        Some(EngineKind::Godot | EngineKind::Unity) => {
+            let engine_label = engine_kind.unwrap().as_label();
             let html_path = html_entrypoint.as_deref().ok_or_else(|| {
                 anyhow::anyhow!(
                     "No HTML file found in upload_dir; required for {} builds",
                     engine_label
                 )
             })?;
-            Some(fetch_entrypoint_params(engine_label, engine_version, html_path).await?)
+            let ver = engine_version.ok_or_else(|| {
+                anyhow::anyhow!("{} engine requires a version", engine_label)
+            })?;
+            Some(fetch_entrypoint_params(engine_label, ver, html_path).await?)
         }
-        EngineKind::JsDos | EngineKind::Ruffle => wavedash_config.executable_entrypoint_params(),
-        EngineKind::Custom => None,
+        Some(EngineKind::JsDos | EngineKind::Ruffle) => {
+            wavedash_config.executable_entrypoint_params()
+        }
+        None => None,
     };
 
     let (rustls_config, cert_path, _key_path) = load_or_create_certificates().await?;
@@ -168,7 +169,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
 
     let local_build = create_local_build(
         &wavedash_config.game_id,
-        engine_label,
+        engine_kind.map(|e| e.as_label()),
         engine_version,
         entrypoint.as_deref(),
         entrypoint_params.as_ref(),
