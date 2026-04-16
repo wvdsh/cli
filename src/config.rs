@@ -86,6 +86,42 @@ pub fn create_http_client() -> Result<reqwest::Client> {
     Ok(client_builder.build()?)
 }
 
+/// Check an API response for errors and return a human-friendly message.
+/// Call this on every API response before reading the body.
+pub async fn check_api_response(response: reqwest::Response) -> Result<reqwest::Response> {
+    if response.status().is_success() {
+        return Ok(response);
+    }
+
+    let status = response.status().as_u16();
+    let body = response.text().await.unwrap_or_default();
+
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+        if let Some(msg) = parsed["error"].as_str() {
+            match (status, msg) {
+                (404, _) | (_, "Game not found") => {
+                    anyhow::bail!(
+                        "Game not found. The game_id in your wavedash.toml may be incorrect.\nRun `wavedash init` to reconfigure."
+                    );
+                }
+                (403, _) | (_, "Access denied") => {
+                    anyhow::bail!(
+                        "Access denied. You don't have permission to access this game.\nCheck that you're logged in with the right account (`wavedash auth status`)."
+                    );
+                }
+                (401, _) => {
+                    anyhow::bail!(
+                        "Authentication failed. Run `wavedash auth login` to re-authenticate."
+                    );
+                }
+                _ => anyhow::bail!("{}", msg),
+            }
+        }
+    }
+
+    anyhow::bail!("API request failed ({}): {}", status, body);
+}
+
 #[derive(Debug, Deserialize)]
 pub struct GodotSection {
     pub version: String,

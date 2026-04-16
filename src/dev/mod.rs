@@ -82,11 +82,7 @@ async fn create_local_build(
         .send()
         .await?;
 
-    if !response.status().is_success() {
-        let error_text = response.text().await?;
-        anyhow::bail!("Failed to create local build: {}", error_text);
-    }
-
+    let response = config::check_api_response(response).await?;
     let result: CreateLocalBuildResponse = response.json().await?;
     Ok(result)
 }

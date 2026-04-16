@@ -1,6 +1,6 @@
 [package]
 name = "wavedash"
-version = "0.1.66"
+version = "0.1.67"
 edition = "2021"
 authors = ["Wavedash Team"]
 description = "Cross-platform CLI tool for uploading game projects to wavedash.com"
@@ -31,6 +31,7 @@ axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "fs", "trace"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+cliclack = "0.5"
 dialoguer = "0.11"
 
 # Serialization

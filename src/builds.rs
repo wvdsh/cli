@@ -9,18 +9,6 @@ mod uploader;
 
 use uploader::{scan_directory, R2Config, R2Uploader};
 
-#[derive(Debug, Deserialize)]
-struct ApiErrorResponse {
-    error: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiError {
-    #[allow(dead_code)]
-    code: String,
-    message: String,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 struct R2Credentials {
     #[serde(rename = "accessKeyId")]
@@ -98,20 +86,7 @@ async fn get_temp_credentials(
         .send()
         .await?;
 
-    if !response.status().is_success() {
-        let error_text = response.text().await?;
-
-        // Try to parse the API error response
-        if let Ok(api_error_response) = serde_json::from_str::<ApiErrorResponse>(&error_text) {
-            // Try to parse the nested error JSON
-            if let Ok(api_error) = serde_json::from_str::<ApiError>(&api_error_response.error) {
-                anyhow::bail!("{}", api_error.message);
-            }
-        }
-
-        // Fallback to raw error text if parsing fails
-        anyhow::bail!("API request failed: {}", error_text);
-    }
+    let response = config::check_api_response(response).await?;
 
     let creds: TempCredsResponse = response.json().await?;
     Ok(creds)
@@ -143,20 +118,7 @@ async fn notify_upload_complete(
         .send()
         .await?;
 
-    if !response.status().is_success() {
-        let error_text = response.text().await?;
-
-        // Try to parse the API error response
-        if let Ok(api_error_response) = serde_json::from_str::<ApiErrorResponse>(&error_text) {
-            // Try to parse the nested error JSON
-            if let Ok(api_error) = serde_json::from_str::<ApiError>(&api_error_response.error) {
-                anyhow::bail!("{}", api_error.message);
-            }
-        }
-
-        // Fallback to raw error text if parsing fails
-        anyhow::bail!("API request failed: {}", error_text);
-    }
+    let response = config::check_api_response(response).await?;
 
     let result: UploadCompleteResponse = response.json().await?;
     Ok(result)

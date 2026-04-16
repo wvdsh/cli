@@ -3,6 +3,7 @@ mod builds;
 mod config;
 mod dev;
 mod file_staging;
+mod init;
 mod updater;
 
 use anyhow::Result;
@@ -11,6 +12,7 @@ use builds::handle_build_push;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use dev::handle_dev;
+use init::handle_init;
 use std::path::PathBuf;
 
 fn mask_token(token: &str) -> String {
@@ -34,6 +36,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    #[command(about = "Initialize a wavedash.toml config for this project")]
+    Init,
     Auth {
         #[command(subcommand)]
         action: AuthCommands,
@@ -103,6 +107,9 @@ async fn run() -> Result<()> {
     updater::show_update_notification();
 
     match cli.command {
+        Commands::Init => {
+            handle_init().await?;
+        }
         Commands::Auth { action } => {
             let auth_manager = AuthManager::new()?;
 
