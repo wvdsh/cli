@@ -304,14 +304,14 @@ pub async fn handle_init() -> Result<()> {
 
     // 4. Select organization
     let spinner = cliclack::spinner();
-    spinner.start("Fetching your organizations...");
+    spinner.start("Fetching your teams...");
     let orgs = fetch_organizations(&api_key).await?;
-    spinner.stop("Fetched organizations");
+    spinner.stop("Fetched teams");
 
     let selected_org = if orgs.is_empty() {
         // No orgs — must create one
-        cliclack::log::info("You don't have any organizations yet.")?;
-        let name: String = cliclack::input("Organization name")
+        cliclack::log::info("You don't have any teams yet.")?;
+        let name: String = cliclack::input("Team name")
             .placeholder("My Studio")
             .validate(|input: &String| {
                 if input.trim().is_empty() {
@@ -323,22 +323,22 @@ pub async fn handle_init() -> Result<()> {
             .interact()?;
 
         let spinner = cliclack::spinner();
-        spinner.start("Creating organization...");
+        spinner.start("Creating team...");
         let org = create_organization(&api_key, &name).await?;
-        spinner.stop(format!("Created organization: {}", org.name));
+        spinner.stop(format!("Created team: {}", org.name));
         org
     } else {
         // Build select with orgs + "Create new" option
-        let mut select = cliclack::select("Select an organization").filter_mode();
+        let mut select = cliclack::select("Select a team").filter_mode();
         for org in &orgs {
             select = select.item(org._id.clone(), &org.name, &org.slug);
         }
-        select = select.item(CREATE_NEW_SENTINEL.to_string(), "Create new organization", "");
+        select = select.item(CREATE_NEW_SENTINEL.to_string(), "Create new team", "");
 
         let choice: String = select.interact()?;
 
         if choice == CREATE_NEW_SENTINEL {
-            let name: String = cliclack::input("Organization name")
+            let name: String = cliclack::input("Team name")
                 .placeholder("My Studio")
                 .validate(|input: &String| {
                     if input.trim().is_empty() {
@@ -350,9 +350,9 @@ pub async fn handle_init() -> Result<()> {
                 .interact()?;
 
             let spinner = cliclack::spinner();
-            spinner.start("Creating organization...");
+            spinner.start("Creating team...");
             let org = create_organization(&api_key, &name).await?;
-            spinner.stop(format!("Created organization: {}", org.name));
+            spinner.stop(format!("Created team: {}", org.name));
             org
         } else {
             orgs.into_iter().find(|o| o._id == choice).unwrap()
@@ -366,7 +366,7 @@ pub async fn handle_init() -> Result<()> {
     spinner.stop("Fetched games");
 
     let selected_game = if games.is_empty() {
-        cliclack::log::info("No games in this organization yet.")?;
+        cliclack::log::info("No games in this team yet.")?;
         let title: String = cliclack::input("Game title")
             .placeholder("My Game")
             .validate(|input: &String| {
@@ -432,9 +432,51 @@ pub async fn handle_init() -> Result<()> {
 
     let website_host = config::get("open_browser_website_host")?;
     cliclack::outro(format!(
-        "Created wavedash.toml! Next steps:\n  → Run `wavedash dev` to test locally\n  → Run `wavedash build push` to upload a build\n  → Manage your game at {}/developer/{}/{}",
+        "Created wavedash.toml! Next steps:\n  → Run `wavedash dev` to test locally\n  → Run `wavedash build push` to upload a build\n  → Manage your game at {}/dev-portal/{}/{}",
         website_host, selected_org.slug, selected_game.slug
     ))?;
 
+    Ok(())
+}
+
+// ── Scripted create commands ─────────────────────────────────────────
+
+fn require_api_key() -> Result<String> {
+    let auth_manager = AuthManager::new()?;
+    let auth_info = auth_manager.get_auth_info();
+    match auth_info.source {
+        AuthSource::None => {
+            anyhow::bail!("Not authenticated. Run `wavedash auth login` first.")
+        }
+        _ => Ok(auth_info.api_key.unwrap()),
+    }
+}
+
+pub async fn handle_team_create(name: &str) -> Result<()> {
+    let api_key = require_api_key()?;
+    let team = create_organization(&api_key, name).await?;
+    let website_host = config::get("open_browser_website_host")?;
+    println!("✓ Created team \"{}\" (id: {})", team.name, team._id);
+    println!("  {}/dev-portal/{}", website_host, team.slug);
+    Ok(())
+}
+
+pub async fn handle_project_create(title: &str, team_id: &str) -> Result<()> {
+    let api_key = require_api_key()?;
+    let orgs = fetch_organizations(&api_key).await?;
+    let team = orgs
+        .iter()
+        .find(|o| o._id == team_id)
+        .ok_or_else(|| anyhow::anyhow!("Team not found: {}", team_id))?;
+    let project = create_game(&api_key, team_id, title).await?;
+    let website_host = config::get("open_browser_website_host")?;
+    println!(
+        "✓ Created project \"{}\" (id: {})",
+        project.title, project._id
+    );
+    println!(
+        "  {}/dev-portal/{}/{}",
+        website_host, team.slug, project.slug
+    );
     Ok(())
 }

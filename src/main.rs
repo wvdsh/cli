@@ -12,7 +12,7 @@ use builds::handle_build_push;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use dev::handle_dev;
-use init::handle_init;
+use init::{handle_init, handle_project_create, handle_team_create};
 use std::path::PathBuf;
 
 fn mask_token(token: &str) -> String {
@@ -56,6 +56,14 @@ enum Commands {
         #[arg(long = "no-open", help = "Don't open the sandbox URL in the browser")]
         no_open: bool,
     },
+    Team {
+        #[command(subcommand)]
+        action: TeamCommands,
+    },
+    Project {
+        #[command(subcommand)]
+        action: ProjectCommands,
+    },
     #[command(about = "Check for and install updates")]
     Update,
 }
@@ -82,6 +90,26 @@ enum BuildCommands {
         config: PathBuf,
         #[arg(short = 'm', long = "message", help = "Build message")]
         message: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum TeamCommands {
+    #[command(about = "Create a new team")]
+    Create {
+        #[arg(long, help = "Team name")]
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProjectCommands {
+    #[command(about = "Create a new project")]
+    Create {
+        #[arg(long, help = "Project title")]
+        title: String,
+        #[arg(long = "team-id", help = "Team ID")]
+        team_id: String,
     },
 }
 
@@ -172,6 +200,16 @@ async fn run() -> Result<()> {
         Commands::Dev { config, no_open } => {
             handle_dev(config, cli.verbose, no_open).await?;
         }
+        Commands::Team { action } => match action {
+            TeamCommands::Create { name } => {
+                handle_team_create(&name).await?;
+            }
+        },
+        Commands::Project { action } => match action {
+            ProjectCommands::Create { title, team_id } => {
+                handle_project_create(&title, &team_id).await?;
+            }
+        },
         Commands::Update => {
             updater::run_update().await?;
         }
