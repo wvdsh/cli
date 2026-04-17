@@ -1,6 +1,6 @@
 [package]
 name = "wavedash"
-version = "0.1.67"
+version = "0.1.68"
 edition = "2021"
 authors = ["Wavedash Team"]
 description = "Cross-platform CLI tool for uploading game projects to wavedash.com"
@@ -63,9 +63,7 @@ url = "2.5"
 urlencoding = "2.1"
 
 # Update checking
-axoupdater = "0.9"
-semver = "1.0"
-chrono = "0.4"
+self_update = { version = "0.44", features = ["archive-tar", "compression-flate2"] }
 
 
 

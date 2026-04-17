@@ -40,14 +40,6 @@ enum EngineType {
 }
 
 impl EngineType {
-    fn label(&self) -> &str {
-        match self {
-            EngineType::Godot => "Godot",
-            EngineType::Unity => "Unity",
-            EngineType::Custom => "Web (HTML5/JS)",
-        }
-    }
-
     fn default_upload_dir(&self) -> &str {
         match self {
             EngineType::Godot => "build",
