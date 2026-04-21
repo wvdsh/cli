@@ -23,17 +23,30 @@ pub fn locate_html_entrypoint(upload_dir: &Path) -> Result<Option<PathBuf>> {
         return Ok(Some(default_index));
     }
 
+    // Only look at the upload_dir's top-level — a Godot/Unity/etc. export
+    // puts its entrypoint at the root of the upload folder, and recursing
+    // would flag engine-emitted subdir HTML (e.g. Unity's `TemplateData/`)
+    // as an ambiguity.
     let mut found: Vec<PathBuf> = Vec::new();
     for entry in WalkDir::new(upload_dir)
         .min_depth(1)
+        .max_depth(1)
         .into_iter()
         .filter_map(|e| e.ok())
     {
-        if entry.file_type().is_file() {
-            if let Some(ext) = entry.path().extension() {
-                if ext.eq_ignore_ascii_case("html") {
-                    found.push(entry.into_path());
-                }
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let is_html = entry
+            .path()
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm"));
+        if is_html {
+            found.push(entry.into_path());
+            // Two is enough to know it's ambiguous — but keep collecting so
+            // the error message lists every offender (capped at a handful).
+            if found.len() >= 8 {
+                break;
             }
         }
     }
