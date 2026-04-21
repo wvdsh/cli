@@ -122,7 +122,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
     // Validate required files exist in upload directory
     FileStaging::prepare(&upload_dir, &wavedash_config)?;
 
-    let html_entrypoint = locate_html_entrypoint(&upload_dir);
+    let html_entrypoint = locate_html_entrypoint(&upload_dir)?;
     let engine_version = wavedash_config.engine_version();
     let entrypoint_params = match engine_kind {
         Some(EngineKind::Godot | EngineKind::Unity) => {

@@ -14,12 +14,16 @@ struct EntrypointParamsResponse {
     entrypoint_params: Value,
 }
 
-pub fn locate_html_entrypoint(upload_dir: &Path) -> Option<PathBuf> {
+pub fn locate_html_entrypoint(upload_dir: &Path) -> Result<Option<PathBuf>> {
+    // `index.html` always wins if present — that's the Web convention and
+    // sidesteps ambiguity when game exporters also emit helper HTML (debug
+    // shells, fullscreen wrappers, etc.).
     let default_index = upload_dir.join("index.html");
     if default_index.is_file() {
-        return Some(default_index);
+        return Ok(Some(default_index));
     }
 
+    let mut found: Vec<PathBuf> = Vec::new();
     for entry in WalkDir::new(upload_dir)
         .min_depth(1)
         .into_iter()
@@ -28,13 +32,34 @@ pub fn locate_html_entrypoint(upload_dir: &Path) -> Option<PathBuf> {
         if entry.file_type().is_file() {
             if let Some(ext) = entry.path().extension() {
                 if ext.eq_ignore_ascii_case("html") {
-                    return Some(entry.into_path());
+                    found.push(entry.into_path());
                 }
             }
         }
     }
 
-    None
+    match found.len() {
+        0 => Ok(None),
+        1 => Ok(Some(found.into_iter().next().unwrap())),
+        _ => {
+            let names: Vec<String> = found
+                .iter()
+                .map(|p| {
+                    p.strip_prefix(upload_dir)
+                        .unwrap_or(p)
+                        .display()
+                        .to_string()
+                })
+                .collect();
+            anyhow::bail!(
+                "Multiple HTML files found in upload_dir ({}):\n  - {}\n\n\
+                 Name one of them `index.html`, or remove the extras (often \
+                 stale files from a previous export with a different name).",
+                upload_dir.display(),
+                names.join("\n  - ")
+            )
+        }
+    }
 }
 
 pub async fn fetch_entrypoint_params(engine: &str, engine_version: &str, html_path: &Path) -> Result<Value> {
