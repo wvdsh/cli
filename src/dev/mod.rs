@@ -1,6 +1,6 @@
 use std::env;
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -106,7 +106,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
 
     let wavedash_config = WavedashConfig::load(&config_path)?;
     let config_dir = config_parent_dir(&config_path)?;
-    let upload_dir = config_dir.join(&wavedash_config.upload_dir);
+    let upload_dir = clean_path(&config_dir.join(&wavedash_config.upload_dir));
 
     if !upload_dir.exists() || !upload_dir.is_dir() {
         anyhow::bail!(
@@ -330,4 +330,29 @@ async fn shutdown_signal() {
     if signal::ctrl_c().await.is_ok() {
         println!("\nReceived Ctrl+C, shutting down dev server...");
     }
+}
+
+/// Collapse `.` segments and resolve `..` without touching the filesystem, so
+/// paths shown in logs and errors don't end up with leading `./` noise when
+/// `wavedash.toml`'s upload_dir already starts with `./`.
+fn clean_path(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in p.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                // Only pop a regular segment; otherwise preserve the `..`.
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                } else {
+                    out.push("..");
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        out.push(".");
+    }
+    out
 }
