@@ -40,9 +40,9 @@ pub fn locate_html_entrypoint(upload_dir: &Path) -> Result<Option<PathBuf>> {
 
     match found.len() {
         0 => Ok(None),
-        1 => Ok(Some(found.into_iter().next().unwrap())),
+        1 => Ok(Some(found.remove(0))),
         _ => {
-            let names: Vec<String> = found
+            let mut names: Vec<String> = found
                 .iter()
                 .map(|p| {
                     p.strip_prefix(upload_dir)
@@ -51,6 +51,7 @@ pub fn locate_html_entrypoint(upload_dir: &Path) -> Result<Option<PathBuf>> {
                         .to_string()
                 })
                 .collect();
+            names.sort();
             anyhow::bail!(
                 "Multiple HTML files found in upload_dir ({}):\n  - {}\n\n\
                  Name one of them `index.html`, or remove the extras (often \
