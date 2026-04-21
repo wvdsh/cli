@@ -138,7 +138,7 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
     let config_dir = config_path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?;
-    let upload_dir = config_dir.join(&wavedash_config.upload_dir);
+    let upload_dir = crate::util::clean_path(&config_dir.join(&wavedash_config.upload_dir));
 
     // Verify source directory exists
     if !upload_dir.exists() {

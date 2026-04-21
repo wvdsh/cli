@@ -1,6 +1,6 @@
 use std::env;
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use axum::{
@@ -23,6 +23,7 @@ use url::Url;
 use crate::auth::AuthManager;
 use crate::config::{self, EngineKind, WavedashConfig};
 use crate::file_staging::FileStaging;
+use crate::util::clean_path;
 
 mod cert;
 mod entrypoint;
@@ -330,29 +331,4 @@ async fn shutdown_signal() {
     if signal::ctrl_c().await.is_ok() {
         println!("\nReceived Ctrl+C, shutting down dev server...");
     }
-}
-
-/// Collapse `.` segments and resolve `..` without touching the filesystem, so
-/// paths shown in logs and errors don't end up with leading `./` noise when
-/// `wavedash.toml`'s upload_dir already starts with `./`.
-fn clean_path(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for comp in p.components() {
-        match comp {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                // Only pop a regular segment; otherwise preserve the `..`.
-                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
-                    out.pop();
-                } else {
-                    out.push("..");
-                }
-            }
-            other => out.push(other),
-        }
-    }
-    if out.as_os_str().is_empty() {
-        out.push(".");
-    }
-    out
 }

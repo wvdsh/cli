@@ -5,6 +5,7 @@ mod dev;
 mod file_staging;
 mod init;
 mod updater;
+mod util;
 
 use anyhow::Result;
 use auth::{login_with_browser, AuthManager, AuthSource};
