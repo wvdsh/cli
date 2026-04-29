@@ -1,6 +1,6 @@
 [package]
 name = "wavedash"
-version = "0.1.62"
+version = "0.1.69"
 edition = "2021"
 authors = ["Wavedash Team"]
 description = "Cross-platform CLI tool for uploading game projects to wavedash.com"
@@ -31,6 +31,7 @@ axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "fs", "trace"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+cliclack = "0.5"
 dialoguer = "0.11"
 
 # Serialization
@@ -43,6 +44,7 @@ anyhow = "1.0"
 
 # Progress & UI
 indicatif = "0.17"
+colored = "3"
 
 # Cross-platform paths
 directories = "5.0"
@@ -61,9 +63,7 @@ url = "2.5"
 urlencoding = "2.1"
 
 # Update checking
-axoupdater = "0.9"
-semver = "1.0"
-chrono = "0.4"
+self_update = { version = "0.44", features = ["archive-tar", "compression-flate2"] }
 
 # Browser automation (CDP)
 chromiumoxide = { version = "0.9", default-features = false }

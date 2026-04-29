@@ -3,13 +3,16 @@ mod builds;
 mod config;
 mod dev;
 mod file_staging;
+mod init;
 mod updater;
 
 use anyhow::Result;
 use auth::{login_with_browser, AuthManager, AuthSource};
 use builds::handle_build_push;
 use clap::{Parser, Subcommand};
+use colored::Colorize;
 use dev::handle_dev;
+use init::{handle_init, handle_project_create, handle_team_create};
 use std::path::PathBuf;
 
 fn mask_token(token: &str) -> String {
@@ -33,6 +36,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    #[command(about = "Initialize a wavedash.toml config for this project")]
+    Init,
     Auth {
         #[command(subcommand)]
         action: AuthCommands,
@@ -50,6 +55,14 @@ enum Commands {
         config: Option<PathBuf>,
         #[arg(long = "no-open", help = "Don't open the sandbox URL in the browser")]
         no_open: bool,
+    },
+    Team {
+        #[command(subcommand)]
+        action: TeamCommands,
+    },
+    Project {
+        #[command(subcommand)]
+        action: ProjectCommands,
     },
     #[command(about = "Check for and install updates")]
     Update,
@@ -80,21 +93,53 @@ enum BuildCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum TeamCommands {
+    #[command(about = "Create a new team")]
+    Create {
+        #[arg(long, help = "Team name")]
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProjectCommands {
+    #[command(about = "Create a new project")]
+    Create {
+        #[arg(long, help = "Project title")]
+        title: String,
+        #[arg(long = "team-id", help = "Team ID")]
+        team_id: String,
+    },
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
     // Install rustls crypto provider for TLS
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
+    if let Err(e) = run().await {
+        eprintln!("{} {:#}", "Error:".red().bold(), e);
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    // Show cached update notification (no background work yet — spawning
-    // child processes here would deliver SIGCHLD and break interactive prompts
-    // like the certificate-trust flow in `wavedash dev`).
-    updater::show_update_notification();
+    // Check for updates in background, but skip if the user is already running `update`
+    let update_handle = if matches!(cli.command, Commands::Update) {
+        None
+    } else {
+        Some(updater::check_for_update())
+    };
 
     match cli.command {
+        Commands::Init => {
+            handle_init().await?;
+        }
         Commands::Auth { action } => {
             let auth_manager = AuthManager::new()?;
 
@@ -155,15 +200,24 @@ async fn main() -> Result<()> {
         Commands::Dev { config, no_open } => {
             handle_dev(config, cli.verbose, no_open).await?;
         }
+        Commands::Team { action } => match action {
+            TeamCommands::Create { name } => {
+                handle_team_create(&name).await?;
+            }
+        },
+        Commands::Project { action } => match action {
+            ProjectCommands::Create { title, team_id } => {
+                handle_project_create(&title, &team_id).await?;
+            }
+        },
         Commands::Update => {
             updater::run_update().await?;
         }
     }
 
-    // Spawn background update check *after* the command finishes so that
-    // SIGCHLD from child processes cannot interrupt interactive prompts.
-    let update_handle = updater::spawn_background_check();
-    let _ = update_handle.join();
+    if let Some(handle) = update_handle {
+        let _ = handle.join();
+    }
 
     Ok(())
 }

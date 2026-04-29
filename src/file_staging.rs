@@ -12,8 +12,16 @@ impl FileStaging {
         upload_dir: &Path,
         wavedash_config: &WavedashConfig,
     ) -> Result<Self> {
-        // Validate entrypoint exists in the upload directory (for custom engine)
+        // Validate entrypoint exists and is an HTML or JS file
         if let Some(entrypoint_str) = wavedash_config.entrypoint() {
+            let lower = entrypoint_str.to_ascii_lowercase();
+            if !lower.ends_with(".html") && !lower.ends_with(".htm") && !lower.ends_with(".js") {
+                anyhow::bail!(
+                    "Entrypoint '{}' must be an HTML file (.html/.htm) or JavaScript file (.js).",
+                    entrypoint_str,
+                );
+            }
+
             let entrypoint_path = upload_dir.join(entrypoint_str);
             if !entrypoint_path.exists() {
                 anyhow::bail!(

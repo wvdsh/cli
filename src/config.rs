@@ -86,6 +86,42 @@ pub fn create_http_client() -> Result<reqwest::Client> {
     Ok(client_builder.build()?)
 }
 
+/// Check an API response for errors and return a human-friendly message.
+/// Call this on every API response before reading the body.
+pub async fn check_api_response(response: reqwest::Response) -> Result<reqwest::Response> {
+    if response.status().is_success() {
+        return Ok(response);
+    }
+
+    let status = response.status().as_u16();
+    let body = response.text().await.unwrap_or_default();
+
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+        if let Some(msg) = parsed["error"].as_str() {
+            match (status, msg) {
+                (404, _) | (_, "Game not found") => {
+                    anyhow::bail!(
+                        "Game not found. The game_id in your wavedash.toml may be incorrect.\nRun `wavedash init` to reconfigure."
+                    );
+                }
+                (403, _) | (_, "Access denied") => {
+                    anyhow::bail!(
+                        "Access denied. You don't have permission to access this game.\nCheck that you're logged in with the right account (`wavedash auth status`)."
+                    );
+                }
+                (401, _) => {
+                    anyhow::bail!(
+                        "Authentication failed. Run `wavedash auth login` to re-authenticate."
+                    );
+                }
+                _ => anyhow::bail!("{}", msg),
+            }
+        }
+    }
+
+    anyhow::bail!("API request failed ({}): {}", status, body);
+}
+
 #[derive(Debug, Deserialize)]
 pub struct GodotSection {
     pub version: String,
@@ -94,12 +130,6 @@ pub struct GodotSection {
 #[derive(Debug, Deserialize)]
 pub struct UnitySection {
     pub version: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CustomSection {
-    pub version: String,
-    pub entrypoint: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,15 +150,13 @@ pub struct RuffleSection {
 pub struct WavedashConfig {
     pub game_id: String,
     pub upload_dir: PathBuf,
+    pub entrypoint: Option<String>,
 
     #[serde(rename = "godot")]
     pub godot: Option<GodotSection>,
 
     #[serde(rename = "unity")]
     pub unity: Option<UnitySection>,
-
-    #[serde(rename = "custom")]
-    pub custom: Option<CustomSection>,
 
     #[serde(rename = "jsdos")]
     pub jsdos: Option<JsDosSection>,
@@ -141,27 +169,15 @@ pub struct WavedashConfig {
 pub enum EngineKind {
     Godot,
     Unity,
-    Custom,
     JsDos,
     Ruffle,
 }
 
 impl EngineKind {
-    pub fn as_config_key(&self) -> &'static str {
-        match self {
-            EngineKind::Godot => "godot",
-            EngineKind::Unity => "unity",
-            EngineKind::Custom => "custom",
-            EngineKind::JsDos => "jsdos",
-            EngineKind::Ruffle => "ruffle",
-        }
-    }
-
     pub fn as_label(&self) -> &'static str {
         match self {
             EngineKind::Godot => "GODOT",
             EngineKind::Unity => "UNITY",
-            EngineKind::Custom => "CUSTOM",
             EngineKind::JsDos => "JSDOS",
             EngineKind::Ruffle => "RUFFLE",
         }
@@ -184,11 +200,10 @@ impl WavedashConfig {
         Ok(config)
     }
 
-    pub fn engine_type(&self) -> Result<EngineKind> {
+    pub fn engine_type(&self) -> Result<Option<EngineKind>> {
         let engines: Vec<EngineKind> = [
             self.godot.is_some().then_some(EngineKind::Godot),
             self.unity.is_some().then_some(EngineKind::Unity),
-            self.custom.is_some().then_some(EngineKind::Custom),
             self.jsdos.is_some().then_some(EngineKind::JsDos),
             self.ruffle.is_some().then_some(EngineKind::Ruffle),
         ]
@@ -197,36 +212,39 @@ impl WavedashConfig {
         .collect();
 
         match engines.len() {
-            1 => Ok(engines[0]),
-            0 => anyhow::bail!(
-                "Config must have exactly one engine section: [godot], [unity], [custom], [jsdos], or [ruffle]"
-            ),
+            0 => Ok(None),
+            1 => Ok(Some(engines[0])),
             _ => anyhow::bail!(
-                "Config must have exactly one engine section: [godot], [unity], [custom], [jsdos], or [ruffle]"
+                "Config must have at most one engine section: [godot], [unity], [jsdos], or [ruffle]"
             ),
         }
     }
 
-    pub fn engine_version(&self) -> Result<&str> {
+    pub fn engine_version(&self) -> Option<&str> {
         if let Some(ref godot) = self.godot {
-            Ok(&godot.version)
+            Some(&godot.version)
         } else if let Some(ref unity) = self.unity {
-            Ok(&unity.version)
-        } else if let Some(ref custom) = self.custom {
-            Ok(&custom.version)
+            Some(&unity.version)
         } else if let Some(ref jsdos) = self.jsdos {
-            Ok(&jsdos.version)
+            Some(&jsdos.version)
         } else if let Some(ref ruffle) = self.ruffle {
-            Ok(&ruffle.version)
+            Some(&ruffle.version)
         } else {
-            anyhow::bail!("No engine section found")
+            None
         }
     }
 
+    /// Returns the entrypoint when no engine block is present.
+    /// Uses the user-specified value from the config, or defaults to "index.html".
     pub fn entrypoint(&self) -> Option<&str> {
-        self.custom
-            .as_ref()
-            .map(|c| c.entrypoint.as_deref().unwrap_or("index.html"))
+        match self.engine_type() {
+            Ok(None) => Some(
+                self.entrypoint
+                    .as_deref()
+                    .unwrap_or("index.html"),
+            ),
+            _ => None,
+        }
     }
 
     /// For JSDOS/Ruffle engines, returns the entrypointParams (executable + optional loader_url)

@@ -32,5 +32,9 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed=.env");
+    println!("cargo:rerun-if-env-changed=SITE_HOST");
+    println!("cargo:rerun-if-env-changed=CONVEX_HTTP_URL");
+    println!("cargo:rerun-if-env-changed=CF_ACCESS_CLIENT_ID");
+    println!("cargo:rerun-if-env-changed=CF_ACCESS_CLIENT_SECRET");
 }
 

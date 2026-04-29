@@ -9,18 +9,6 @@ mod uploader;
 
 use uploader::{scan_directory, R2Config, R2Uploader};
 
-#[derive(Debug, Deserialize)]
-struct ApiErrorResponse {
-    error: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiError {
-    #[allow(dead_code)]
-    code: String,
-    message: String,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 struct R2Credentials {
     #[serde(rename = "accessKeyId")]
@@ -48,8 +36,8 @@ struct TempCredsResponse {
 
 async fn get_temp_credentials(
     game_id: &str,
-    engine: &str,
-    engine_version: &str,
+    engine: Option<&str>,
+    engine_version: Option<&str>,
     entrypoint: Option<&str>,
     entrypoint_params: Option<serde_json::Value>,
     message: Option<&str>,
@@ -65,12 +53,17 @@ async fn get_temp_credentials(
     );
 
     let mut request_body = serde_json::json!({
-        "engine": engine,
-        "engineVersion": engine_version,
         "buildSizeBytes": build_size_bytes
     });
 
-    // Add entrypoint if provided (for custom engine)
+    if let Some(eng) = engine {
+        request_body["engine"] = serde_json::json!(eng);
+    }
+
+    if let Some(ver) = engine_version {
+        request_body["engineVersion"] = serde_json::json!(ver);
+    }
+
     if let Some(ep) = entrypoint {
         request_body["entrypoint"] = serde_json::json!(ep);
     }
@@ -93,20 +86,7 @@ async fn get_temp_credentials(
         .send()
         .await?;
 
-    if !response.status().is_success() {
-        let error_text = response.text().await?;
-
-        // Try to parse the API error response
-        if let Ok(api_error_response) = serde_json::from_str::<ApiErrorResponse>(&error_text) {
-            // Try to parse the nested error JSON
-            if let Ok(api_error) = serde_json::from_str::<ApiError>(&api_error_response.error) {
-                anyhow::bail!("{}", api_error.message);
-            }
-        }
-
-        // Fallback to raw error text if parsing fails
-        anyhow::bail!("API request failed: {}", error_text);
-    }
+    let response = config::check_api_response(response).await?;
 
     let creds: TempCredsResponse = response.json().await?;
     Ok(creds)
@@ -138,20 +118,7 @@ async fn notify_upload_complete(
         .send()
         .await?;
 
-    if !response.status().is_success() {
-        let error_text = response.text().await?;
-
-        // Try to parse the API error response
-        if let Ok(api_error_response) = serde_json::from_str::<ApiErrorResponse>(&error_text) {
-            // Try to parse the nested error JSON
-            if let Ok(api_error) = serde_json::from_str::<ApiError>(&api_error_response.error) {
-                anyhow::bail!("{}", api_error.message);
-            }
-        }
-
-        // Fallback to raw error text if parsing fails
-        anyhow::bail!("API request failed: {}", error_text);
-    }
+    let response = config::check_api_response(response).await?;
 
     let result: UploadCompleteResponse = response.json().await?;
     Ok(result)
@@ -194,8 +161,8 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
     let engine_kind = wavedash_config.engine_type()?;
     let creds = get_temp_credentials(
         &wavedash_config.game_id,
-        engine_kind.as_config_key(),
-        wavedash_config.engine_version()?,
+        engine_kind.map(|e| e.as_label()),
+        wavedash_config.engine_version(),
         wavedash_config.entrypoint(),
         wavedash_config.executable_entrypoint_params(),
         message.as_deref(),
