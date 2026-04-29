@@ -30,12 +30,6 @@ impl FileStaging {
                     upload_dir.display()
                 );
             }
-            if !entrypoint_str.ends_with(".html") && !entrypoint_str.ends_with(".htm") {
-                anyhow::bail!(
-                    "Entrypoint '{}' must be an HTML file (e.g., index.html)",
-                    entrypoint_str,
-                );
-            }
         }
 
         // Validate executable and loader_url files exist (for JSDOS/Ruffle)
