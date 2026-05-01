@@ -131,6 +131,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: latest }
 
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+
       - uses: dopplerhq/cli-action@v3
 
       # Pull R2 creds from Doppler. They never leave this step's bash
