@@ -1,20 +1,20 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::Result;
-use futures::StreamExt;
+use anyhow::{Context, Result};
 use serde::Deserialize;
-use tokio::signal;
 
 use crate::auth::AuthManager;
 use crate::config::{self, EngineKind, WavedashConfig};
 use crate::file_staging::FileStaging;
 
-mod browser;
+mod dev_app;
 mod entrypoint;
-mod interceptor;
+mod launcher;
 
+use dev_app::{ensure_dev_app, user_data_dir};
 use entrypoint::{fetch_entrypoint_params, locate_html_entrypoint};
+use launcher::{run_dev_app, DevAppConfig};
 
 #[derive(Debug, Deserialize)]
 struct CreateLocalBuildResponse {
@@ -34,10 +34,7 @@ async fn create_local_build(
     let client = config::create_http_client()?;
     let api_host = config::get("api_host")?;
 
-    let url = format!(
-        "{}/api/games/{}/builds/create-local",
-        api_host, game_id
-    );
+    let url = format!("{}/api/games/{}/builds/create-local", api_host, game_id);
 
     let mut request_body = serde_json::json!({});
 
@@ -72,12 +69,7 @@ async fn create_local_build(
 
 const DEFAULT_CONFIG: &str = "./wavedash.toml";
 
-/// Virtual origin for the LNA connection test. No real server listens here —
-/// CDP intercepts the HEAD request and returns 200 OK.
-const VIRTUAL_LOCAL_ORIGIN: &str = "https://localhost:1";
-
-pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, _no_open: bool) -> Result<()> {
-    // Check authentication
+pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<()> {
     let auth_manager = AuthManager::new()?;
     let api_key = auth_manager
         .get_api_key()
@@ -102,11 +94,18 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, _no_open: b
         );
     }
 
+    // Send an absolute path to the dev-app so it doesn't rely on inheriting the
+    // CLI's cwd. With `DEV_APP_DEV_PATH` set, electron is spawned with its cwd
+    // pinned to the dev-app source dir, so a relative `./dist` would resolve
+    // there (and serve the dev-app's own bundled `main.js`).
+    let upload_dir = upload_dir.canonicalize().with_context(|| {
+        format!("Failed to canonicalize upload_dir: {}", upload_dir.display())
+    })?;
+
     let engine_kind = wavedash_config.engine_type()?;
 
     let entrypoint = wavedash_config.entrypoint().map(|s| s.to_string());
 
-    // Validate required files exist in upload directory
     FileStaging::prepare(&upload_dir, &wavedash_config)?;
 
     let html_entrypoint = locate_html_entrypoint(&upload_dir);
@@ -120,9 +119,8 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, _no_open: b
                     engine_label
                 )
             })?;
-            let ver = engine_version.ok_or_else(|| {
-                anyhow::anyhow!("{} engine requires a version", engine_label)
-            })?;
+            let ver = engine_version
+                .ok_or_else(|| anyhow::anyhow!("{} engine requires a version", engine_label))?;
             Some(fetch_entrypoint_params(engine_label, ver, html_path).await?)
         }
         Some(EngineKind::JsDos | EngineKind::Ruffle) => {
@@ -131,8 +129,6 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, _no_open: b
         None => None,
     };
 
-    // Create a new local build via the API
-    println!("Creating local build...");
     let local_build = create_local_build(
         &wavedash_config.game_id,
         engine_kind.map(|e| e.as_label()),
@@ -143,73 +139,36 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, _no_open: b
     )
     .await?;
 
-    // Ensure Chrome for Testing is downloaded
-    let chrome_path = browser::ensure_chrome_installed().await?;
-
-    // Launch Chrome
-    println!("Launching Chrome...");
-    let (mut chrome_browser, mut handler) = browser::launch_chrome(&chrome_path).await?;
-
-    // Spawn the CDP handler loop (required for chromiumoxide to process events)
-    let handler_task = tokio::spawn(async move {
-        while handler.next().await.is_some() {}
-    });
-
-    // Open a page and set up request interception
-    let page = chrome_browser
-        .new_page("about:blank")
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to create browser page: {e}"))?;
-
     let site_host = config::get("open_browser_website_host")?;
     let mainsite_host = site_host
         .trim_start_matches("https://")
         .trim_start_matches("http://");
-    let game_subdomain = format!(
-        "{}.local.{}",
-        local_build.game_slug, mainsite_host
-    );
+    // Iframe origin is `<gameId>.local.<mainsite>` — must match
+    // GameRunnerComponent's `gameplayOrigin`, which uses the Convex game `_id`
+    // (i.e. wavedash.toml's `game_id`), not the slug.
+    let game_subdomain = format!("{}.local.{}", wavedash_config.game_id, mainsite_host);
 
-    interceptor::setup_interception(
-        &page,
-        &upload_dir,
-        VIRTUAL_LOCAL_ORIGIN,
-        &game_subdomain,
-    )
-    .await?;
-
-    // Build playtest URL — navigate directly (skip permission-grant redirect)
     let playtest_url = format!(
-        "{}/playtest/{}/{}?localorigin={}",
-        site_host,
-        local_build.game_slug,
-        local_build.uuid,
-        urlencoding::encode(VIRTUAL_LOCAL_ORIGIN),
+        "{}/playtest/{}/{}",
+        site_host, local_build.game_slug, local_build.uuid,
     );
 
-    page.goto(&playtest_url)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to navigate to playtest page: {e}"))?;
+    let launch = ensure_dev_app().await?;
+    let user_data = user_data_dir()?;
+    std::fs::create_dir_all(&user_data)?;
 
-    println!("--------------------------------");
-    println!("Game running at:\n{}", playtest_url);
-    println!("--------------------------------");
+    let dev_app_config = DevAppConfig {
+        upload_dir: upload_dir.to_string_lossy().to_string(),
+        game_subdomain,
+        playtest_url,
+        verbose,
+    };
 
-    if verbose {
-        println!("Verbose logging enabled. CDP interception active.");
-    }
-
-    // Wait for Ctrl+C
-    shutdown_signal().await;
-
-    // Clean shutdown
-    let _ = chrome_browser.close().await;
-    handler_task.abort();
-
+    run_dev_app(launch, &dev_app_config, &user_data.to_string_lossy()).await?;
     Ok(())
 }
 
-fn config_parent_dir(config_path: &PathBuf) -> Result<PathBuf> {
+fn config_parent_dir(config_path: &Path) -> Result<PathBuf> {
     if let Some(parent) = config_path.parent() {
         if parent.as_os_str().is_empty() {
             return Ok(env::current_dir()?);
@@ -217,10 +176,4 @@ fn config_parent_dir(config_path: &PathBuf) -> Result<PathBuf> {
         return Ok(parent.to_path_buf());
     }
     Ok(env::current_dir()?)
-}
-
-async fn shutdown_signal() {
-    if signal::ctrl_c().await.is_ok() {
-        println!("\nReceived Ctrl+C, shutting down...");
-    }
 }

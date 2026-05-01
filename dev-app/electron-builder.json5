@@ -1,0 +1,66 @@
+{
+  // Wavedash Dev is consumed exclusively by the CLI: the CLI downloads
+  // the platform-specific zip from our CDN, extracts it under
+  // ~/.wavedash/dev-app/<version>/, and execs the binary directly. We never
+  // ship installers, dmg, msi, etc. — just plain zips.
+  appId: "gg.wavedash.dev",
+  productName: "Wavedash Dev",
+  copyright: "Copyright © 2026 Wavedash",
+
+  directories: {
+    output: "out",
+    buildResources: "build",
+  },
+
+  files: [
+    "dist/**/*",
+    "build/icon.png",
+    "build/icon-rounded.png",
+    "package.json",
+    "node_modules/**/*",
+  ],
+
+  // Keep helper bundle ids namespaced under our appId so macOS Activity
+  // Monitor shows "Wavedash Dev Helper" instead of Electron's defaults.
+  protocols: [],
+
+  asar: true,
+
+  // Signing is intentionally disabled on every platform. The CLI downloads
+  // the zip via reqwest (which doesn't set `com.apple.quarantine` on macOS or
+  // Mark-of-the-Web on Windows) and exec's the binary as a child process, so
+  // neither Gatekeeper nor SmartScreen ever sees the file. Reintroduce signing
+  // only if someone needs to launch the .app from Finder/Explorer directly.
+  mac: {
+    category: "public.app-category.developer-tools",
+    target: [
+      { target: "zip", arch: ["arm64"] },
+      { target: "zip", arch: ["x64"] },
+    ],
+    identity: null,
+    gatekeeperAssess: false,
+  },
+
+  linux: {
+    target: [
+      { target: "zip", arch: ["x64"] },
+    ],
+    category: "Development",
+    // Pin the binary name so the CLI knows where to find it after extract.
+    executableName: "wavedash-dev",
+  },
+
+  win: {
+    target: [
+      { target: "zip", arch: ["x64"] },
+    ],
+    signAndEditExecutable: false,
+  },
+
+  // Output filename pattern: <productName>-<version>-<os>-<arch>.zip
+  //   e.g. "Wavedash Dev-0.1.0-mac-arm64.zip".
+  // The release workflow renames these to the CDN convention
+  //   <platform>.zip
+  // so the CLI's download URL stays predictable.
+  artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
+}

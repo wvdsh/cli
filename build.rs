@@ -3,7 +3,14 @@ fn main() {
     let _ = dotenvy::dotenv();
 
     // Required config vars - must be set either by Doppler or .env
-    let required = ["SITE_HOST", "CONVEX_HTTP_URL"];
+    let required = [
+        "SITE_HOST",
+        "CONVEX_HTTP_URL",
+        // Public host of the wavedash-dev-app R2 bucket (e.g. r2.dev URL or
+        // a custom domain). Baked in here so `wavedash dev` always knows
+        // where to fetch the matching Wavedash Dev build.
+        "CF_R2_WAVEDASH_DEV_APP_HOST",
+    ];
 
     for var in required {
         let value = std::env::var(var)
@@ -36,5 +43,6 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CONVEX_HTTP_URL");
     println!("cargo:rerun-if-env-changed=CF_ACCESS_CLIENT_ID");
     println!("cargo:rerun-if-env-changed=CF_ACCESS_CLIENT_SECRET");
+    println!("cargo:rerun-if-env-changed=CF_R2_WAVEDASH_DEV_APP_HOST");
 }
 

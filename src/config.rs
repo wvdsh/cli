@@ -54,12 +54,22 @@ pub fn credentials_path() -> Result<PathBuf> {
     Ok(wavedash_dir()?.join("credentials.json"))
 }
 
-/// Create an HTTP client configured with Cloudflare Access headers if needed
+/// Header the server reads to know which CLI version a request came from.
+/// Lets the API gate behavior on minimum versions, log usage, and surface
+/// "please upgrade" prompts without parsing User-Agent.
+pub const CLI_VERSION_HEADER: &str = "X-Wavedash-CLI-Version";
+
+/// Create an HTTP client configured with the CLI version header (always)
+/// and Cloudflare Access headers (only on staging when creds are baked in).
 pub fn create_http_client() -> Result<reqwest::Client> {
     let config = Config::load()?;
-    let mut client_builder = reqwest::Client::builder();
 
-    // Check if we're targeting staging and have CF credentials
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        CLI_VERSION_HEADER,
+        reqwest::header::HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
+    );
+
     let api_host = &config.api_host;
     let needs_cf_headers = api_host
         .trim_start_matches("https://")
@@ -70,7 +80,6 @@ pub fn create_http_client() -> Result<reqwest::Client> {
         if let (Some(client_id), Some(client_secret)) =
             (&config.cf_access_client_id, &config.cf_access_client_secret)
         {
-            let mut headers = reqwest::header::HeaderMap::new();
             headers.insert(
                 "CF-Access-Client-Id",
                 reqwest::header::HeaderValue::from_str(client_id)?,
@@ -79,11 +88,10 @@ pub fn create_http_client() -> Result<reqwest::Client> {
                 "CF-Access-Client-Secret",
                 reqwest::header::HeaderValue::from_str(client_secret)?,
             );
-            client_builder = client_builder.default_headers(headers);
         }
     }
 
-    Ok(client_builder.build()?)
+    Ok(reqwest::Client::builder().default_headers(headers).build()?)
 }
 
 /// Check an API response for errors and return a human-friendly message.

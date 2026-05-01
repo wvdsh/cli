@@ -54,7 +54,6 @@ opendal = { version = "0.49", features = ["services-s3"] }
 
 # File operations
 walkdir = "2.5"
-mime_guess = "2.0"
 
 # Authentication
 tiny_http = "0.12"
@@ -65,9 +64,7 @@ urlencoding = "2.1"
 # Update checking
 self_update = { version = "0.44", features = ["archive-tar", "compression-flate2"] }
 
-# Browser automation (CDP)
-chromiumoxide = { version = "0.9", default-features = false }
-base64 = "0.22"
+# Sandbox download (extracts the platform-specific Wavedash Dev zip)
 zip = "2"
 
 
