@@ -56,7 +56,6 @@ pub struct DevAppLaunch {
 fn platform_folder() -> Result<&'static str> {
     Ok(match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => "mac-arm64",
-        ("macos", "x86_64") => "mac-x64",
         ("linux", "x86_64") => "linux-x64",
         ("windows", "x86_64") => "win-x64",
         (os, arch) => anyhow::bail!("Unsupported platform: {os}/{arch}"),

@@ -26,10 +26,6 @@ jobs:
             runner: macos-14
             builder_args: "--mac --arm64"
             artifact_glob: "out/*-mac-arm64.zip"
-          - platform: mac-x64
-            runner: macos-13
-            builder_args: "--mac --x64"
-            artifact_glob: "out/*-mac-x64.zip"
           - platform: linux-x64
             runner: ubuntu-latest
             builder_args: "--linux --x64"
