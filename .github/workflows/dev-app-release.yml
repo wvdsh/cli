@@ -1,27 +1,7 @@
-# Build + publish Wavedash Dev per platform.
-#
-# Triggers on the same tag pattern as release.yml (cargo-dist). The CLI version
-# IS the dev-app version (see cli/src/dev/dev_app.rs::DEV_APP_VERSION); every
-# CLI release ships a matching dev-app build under the same tag, even if the
-# dev-app source didn't change.
-#
-# Output: <platform>.zip artifacts attached to the GitHub Release for the tag.
-# The CLI's download URL hardcodes that path, so don't rename without updating
-# cli/src/dev/dev_app.rs in the same commit.
-#
-# No code signing on any platform. The CLI downloads zips via reqwest (which
-# doesn't set `com.apple.quarantine` on macOS or Mark-of-the-Web on Windows)
-# and exec's the binary as a child process, so neither Gatekeeper nor
-# SmartScreen ever runs against it. See cli/dev-app/electron-builder.json5
-# for the corresponding `identity: null` / `signAndEditExecutable: false`
-# settings, and cli/dev-app/README.md for the rationale + tradeoffs.
-
 name: Dev App Release
 
 on:
-  push:
-    tags:
-      - "**[0-9]+.[0-9]+.[0-9]+*"
+  workflow_call:
   workflow_dispatch:
     inputs:
       tag:
