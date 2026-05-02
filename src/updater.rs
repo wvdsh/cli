@@ -54,12 +54,23 @@ pub async fn run_update() -> Result<()> {
     }
 
     tokio::task::spawn_blocking(move || {
+        // cargo-dist nests the binary inside `<bin>-<target>/` for Unix
+        // tarballs, but ships a flat .zip on Windows.
+        #[cfg(not(target_os = "windows"))]
+        const BIN_PATH_IN_ARCHIVE: &str = "{{ bin }}-{{ target }}/{{ bin }}";
+        #[cfg(target_os = "windows")]
+        const BIN_PATH_IN_ARCHIVE: &str = "{{ bin }}";
+
         let status = self_update::backends::github::Update::configure()
             .repo_owner(&repo_owner())
             .repo_name(&repo_name())
             .bin_name(BIN_NAME)
+            .bin_path_in_archive(BIN_PATH_IN_ARCHIVE)
             .current_version(CURRENT_VERSION)
             .show_download_progress(true)
+            // self_update's own progress text says "exe" on every platform
+            // and is generally noisy. Silence it; we print our own line below.
+            .show_output(false)
             .no_confirm(true)
             .build()?
             .update()?;
