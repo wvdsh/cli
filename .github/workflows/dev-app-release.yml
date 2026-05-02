@@ -2,6 +2,11 @@ name: Dev App Release
 
 on:
   workflow_call:
+    inputs:
+      plan:
+        description: "dist plan JSON (passed automatically by cargo-dist; unused here)"
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       tag:

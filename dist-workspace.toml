@@ -21,6 +21,13 @@ unix-archive = ".tar.gz"
 install-path = "CARGO_HOME"
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
+# Build + upload the dev-app (Electron) in parallel with the CLI binaries.
+# Hooked here (rather than `host-jobs`) because cargo-dist v0.30.2 only includes
+# custom local/global jobs in `host.if`; host-jobs are listed in `announce.needs`
+# but not its `if:`, so a failed host-job wouldn't block the release
+# (axodotdev/cargo-dist#919). local-artifacts-jobs is the only hook in v0.30.2
+# that gates the GitHub Release without manual edits to release.yml.
+local-artifacts-jobs = ["./dev-app-release"]
 # Self-update is handled in-binary via self_update crate
 install-updater = false
 # Custom build command to inject Doppler secrets at compile time
