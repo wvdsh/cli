@@ -2,12 +2,20 @@
  * Wavedash Dev — Electron host for `wavedash dev`.
  *
  * Lifecycle:
- *   1. CLI spawns this binary with `--user-data-dir=<path>` as a CLI arg
- *      and writes one JSON config line to stdin.
+ *   1. CLI spawns this binary with three required CLI args:
+ *        --user-data-dir=<path>   profile dir (cookies, cache, logs)
+ *        --config-path=<path>     temp file holding the JSON config blob
+ *        --parent-pid=<pid>       CLI's PID; we quit when it dies
+ *      We don't take config over stdin: on Windows the packaged binary is a
+ *      GUI subsystem .exe, and Windows detaches GUI processes from inherited
+ *      stdin pipes (electron/electron#11680, #4218, #21705), so process.stdin
+ *      fires `end` before any data arrives. The temp-file route works
+ *      identically across platforms.
  *   2. The user-data-dir MUST be set synchronously at module load — Electron
  *      caches the path the first time it readies internally, and any
- *      `setPath('userData', ...)` after that is a no-op. Reading it from
- *      argv keeps the call sync; the rest of the config waits on stdin.
+ *      `setPath('userData', ...)` after that is a no-op. argv parsing happens
+ *      at the top of this module so every per-app path is pinned before any
+ *      `app.whenReady` work runs.
  *   3. Start a local HTTPS server (`server.ts`) on a free port and apply
  *      `--host-rules=MAP <gameSubdomain>:443 127.0.0.1:<port>` so chromium
  *      routes the game iframe to us. No CDP `Fetch.enable`, so the bundled
@@ -17,9 +25,12 @@
  *      playtest URL.
  *   5. Emit `{"type":"ready"}` on first did-finish-load.
  *   6. On window close → emit `{"type":"closed"}` and exit 0.
- *   7. On stdin EOF → quit (lets the CLI shut us down by closing stdin).
+ *   7. Parent watchdog: poll `process.kill(parentPid, 0)` once a second and
+ *      `app.quit()` if it throws ESRCH. Catches the case where the CLI dies
+ *      without getting a chance to kill us (crash, kill -9).
  */
 
+import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 // Silence the dev-only "Insecure Content-Security-Policy" / "unsafe-eval"
@@ -49,32 +60,40 @@ interface RawConfig {
 }
 
 const USER_DATA_DIR_FLAG = "--user-data-dir=";
+const CONFIG_PATH_FLAG = "--config-path=";
+const PARENT_PID_FLAG = "--parent-pid=";
 
-function findUserDataDirArg(): string {
+function requireArg(flag: string): string {
   // Search every argv slot — works whether we're running compiled
   // (argv[0] = exe, argv[1+] = our flags) or via `npx electron .`
   // (argv[0] = electron, argv[1] = '.', argv[2+] = our flags).
-  const found = process.argv.find((a) => a.startsWith(USER_DATA_DIR_FLAG));
+  const found = process.argv.find((a) => a.startsWith(flag));
   if (!found) {
-    process.stderr.write(`missing required arg ${USER_DATA_DIR_FLAG}<path>\n`);
+    process.stderr.write(`missing required arg ${flag}<value>\n`);
     process.exit(2);
   }
-  return found.slice(USER_DATA_DIR_FLAG.length);
+  return found.slice(flag.length);
 }
 
 // Synchronous, top-of-module: pin every per-app path before anything else
-// (chrome-switches, name, async stdin read). If we wait until after
-// `await readConfigLine()`, Electron's internal path resolver may have
-// already readied and the calls become silent no-ops — that's how cookies
-// were leaking to `~/Library/Application Support/Electron` and breaking
-// auth persistence.
+// (chrome-switches, name, config read). If we wait until after `await
+// app.whenReady()`, Electron's internal path resolver may have already
+// readied and the calls become silent no-ops — that's how cookies were
+// leaking to `~/Library/Application Support/Electron` and breaking auth
+// persistence.
 //
 // What lives where, all under ~/.wavedash/dev-app-profile/:
 //   ./                  cookies, localStorage, IndexedDB, Service Workers (userData + sessionData)
 //   ./Cache/            Chromium HTTP disk cache (--disk-cache-dir)
 //   ./Logs/             app.log et al
 //   ./CrashDumps/       Crashpad output
-const USER_DATA_DIR = findUserDataDirArg();
+const USER_DATA_DIR = requireArg(USER_DATA_DIR_FLAG);
+const CONFIG_PATH = requireArg(CONFIG_PATH_FLAG);
+const PARENT_PID = Number.parseInt(requireArg(PARENT_PID_FLAG), 10);
+if (!Number.isFinite(PARENT_PID) || PARENT_PID <= 0) {
+  process.stderr.write(`invalid ${PARENT_PID_FLAG}<pid>\n`);
+  process.exit(2);
+}
 app.setName("Wavedash Dev");
 // Append a token to the User-Agent so the wavedash site can detect that
 // it's loaded inside Wavedash Dev — server-side via the `user-agent` request
@@ -98,38 +117,47 @@ function logErr(...args: unknown[]): void {
   process.stderr.write(args.map(String).join(" ") + "\n");
 }
 
-function readConfigLine(): Promise<RawConfig> {
-  return new Promise((resolve, reject) => {
-    let buffer = "";
-    const onData = (chunk: Buffer): void => {
-      buffer += chunk.toString("utf8");
-      const idx = buffer.indexOf("\n");
-      if (idx === -1) return;
-      const line = buffer.slice(0, idx);
-      process.stdin.off("data", onData);
-      process.stdin.off("end", onEnd);
-      try {
-        const parsed = JSON.parse(line) as RawConfig;
-        if (
-          typeof parsed.uploadDir !== "string" ||
-          typeof parsed.gameSubdomain !== "string" ||
-          typeof parsed.playtestUrl !== "string"
-        ) {
-          reject(new Error("config missing required fields"));
-          return;
-        }
-        resolve(parsed);
-      } catch (err) {
-        reject(err);
+function readConfig(): RawConfig {
+  let raw: string;
+  try {
+    raw = readFileSync(CONFIG_PATH, "utf8");
+  } catch (err) {
+    throw new Error(`failed to read config from ${CONFIG_PATH}: ${String(err)}`);
+  }
+  // Best-effort cleanup so the file doesn't linger if the CLI crashed before
+  // its own guard fired. The CLI also unlinks on Drop; whichever wins is fine.
+  try {
+    unlinkSync(CONFIG_PATH);
+  } catch {
+    // Already gone, or perms — not worth surfacing.
+  }
+  const parsed = JSON.parse(raw) as RawConfig;
+  if (
+    typeof parsed.uploadDir !== "string" ||
+    typeof parsed.gameSubdomain !== "string" ||
+    typeof parsed.playtestUrl !== "string"
+  ) {
+    throw new Error("config missing required fields");
+  }
+  return parsed;
+}
+
+function watchParentProcess(): void {
+  // signal 0 doesn't actually signal — it just probes existence/permission.
+  // ESRCH means the parent is gone; quit. EPERM means it exists but we can't
+  // signal it (different user) — treat as alive, matching the previous
+  // stdin-EOF contract which only fired when the parent actually exited.
+  const interval = setInterval(() => {
+    try {
+      process.kill(PARENT_PID, 0);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ESRCH") {
+        clearInterval(interval);
+        app.quit();
       }
-    };
-    const onEnd = (): void => {
-      process.stdin.off("data", onData);
-      reject(new Error("stdin closed before config received"));
-    };
-    process.stdin.on("data", onData);
-    process.stdin.on("end", onEnd);
-  });
+    }
+  }, 1000);
+  interval.unref();
 }
 
 function applyChromeSwitches(gameSubdomain: string, serverPort: number): void {
@@ -230,7 +258,8 @@ function attachContextMenu(window: BrowserWindow): void {
 }
 
 async function bootstrap(): Promise<void> {
-  const config = await readConfigLine();
+  const config = readConfig();
+  watchParentProcess();
 
   // Start the local server BEFORE app.whenReady so we can bake the chosen
   // port into `--host-rules`. Switches must be appended before chromium
@@ -254,11 +283,6 @@ async function bootstrap(): Promise<void> {
   }
 
   applyChromeSwitches(config.gameSubdomain, server.port);
-
-  // When the CLI dies (or closes our stdin), shut ourselves down too.
-  process.stdin.on("end", () => {
-    app.quit();
-  });
 
   await app.whenReady();
 

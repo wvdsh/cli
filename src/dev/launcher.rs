@@ -1,7 +1,13 @@
 //! Spawn the Wavedash Dev subprocess and shuttle the IPC contract.
 //!
 //! IPC contract (mirrored in cli/dev-app/src/main.ts):
-//!   - CLI → dev-app stdin: one JSON line of [`DevAppConfig`].
+//!   - CLI → dev-app: a JSON [`DevAppConfig`] written to a temp file whose
+//!     path is passed as `--config-path=<path>`. The dev-app reads it
+//!     synchronously at startup and unlinks it. Stdin is intentionally not
+//!     used: on Windows the packaged dev-app is a GUI subsystem .exe, and
+//!     Windows detaches GUI processes from inherited stdin pipes
+//!     (electron/electron#11680, #4218, #21705), so `process.stdin` fires
+//!     `end` before any data arrives.
 //!   - dev-app → CLI stdout: one JSON object per line.
 //!     - `{"type":"ready"}` after first did-finish-load.
 //!     - `{"type":"closed"}` immediately before dev-app app.quit().
@@ -11,15 +17,18 @@
 //!     and `--verbose` here also adds CLI-side ready/exit echoes plus the
 //!     raw stdout fallback.
 //!
-//! Liveness: closing our stdin end signals the dev-app to quit. We rely on
-//! that for clean shutdown when the user hits Ctrl+C.
+//! Liveness: the dev-app polls `--parent-pid=<pid>` every second and quits
+//! if that process is gone, so a CLI crash doesn't leave an orphan. On a
+//! clean Ctrl+C we kill the child directly — there's no in-band shutdown
+//! signal anymore.
 
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::signal;
 
 use super::dev_app::DevAppLaunch;
@@ -33,6 +42,17 @@ pub struct DevAppConfig {
     pub verbose: bool,
 }
 
+/// Removes the temp config file when dropped, so a crash between write and
+/// dev-app pickup doesn't leave a stale file in `%TEMP%`/`/tmp`. The dev-app
+/// also unlinks on read; whichever fires first wins.
+struct ConfigFileGuard(PathBuf);
+
+impl Drop for ConfigFileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 pub async fn run_dev_app(
     launch: DevAppLaunch,
     config: &DevAppConfig,
@@ -40,13 +60,25 @@ pub async fn run_dev_app(
 ) -> Result<()> {
     let verbose = config.verbose;
 
+    let parent_pid = std::process::id();
+    let config_path = std::env::temp_dir().join(format!("wavedash-dev-config-{parent_pid}.json"));
+    std::fs::write(&config_path, serde_json::to_vec(config)?).with_context(|| {
+        format!(
+            "Failed to write dev-app config to {}",
+            config_path.display()
+        )
+    })?;
+    let _config_guard = ConfigFileGuard(config_path.clone());
+
     let mut cmd = tokio::process::Command::new(&launch.command);
     // The dev-app needs the user-data-dir synchronously at module load (see
-    // dev-app/src/main.ts) — pass it as a CLI flag, not via stdin, so it's
-    // available before Electron's internal path resolver readies itself.
+    // dev-app/src/main.ts). Both the config path and parent PID are read at
+    // the same point, so they go on argv too.
     cmd.args(&launch.args)
         .arg(format!("--user-data-dir={}", user_data_dir))
-        .stdin(Stdio::piped())
+        .arg(format!("--config-path={}", config_path.display()))
+        .arg(format!("--parent-pid={parent_pid}"))
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -58,10 +90,6 @@ pub async fn run_dev_app(
         .spawn()
         .with_context(|| format!("Failed to spawn dev-app: {:?}", launch.command))?;
 
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| anyhow::anyhow!("dev-app child stdin missing"))?;
     let stdout = child
         .stdout
         .take()
@@ -70,13 +98,6 @@ pub async fn run_dev_app(
         .stderr
         .take()
         .ok_or_else(|| anyhow::anyhow!("dev-app child stderr missing"))?;
-
-    let line = serde_json::to_string(config)? + "\n";
-    stdin
-        .write_all(line.as_bytes())
-        .await
-        .with_context(|| "Failed to write dev-app config")?;
-    stdin.flush().await?;
 
     let stderr_task = tokio::spawn(async move {
         // Always passthrough — dev-app stderr is the dev-facing access log
@@ -132,10 +153,12 @@ pub async fn run_dev_app(
         }
     }
 
-    // Closing our end of stdin signals the dev-app to quit.
-    drop(stdin);
-
-    let exit = match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+    // Both shutdown paths converge here. On `closed`, app.quit() is already
+    // running on the dev-app side, so the wait usually returns immediately.
+    // On Ctrl+C there's no in-band quit signal, so the timeout fires and we
+    // hard-kill — the dev-app's parent-PID watchdog would also catch this
+    // once we exit, but killing is faster and avoids relying on it.
+    let exit = match tokio::time::timeout(Duration::from_secs(2), child.wait()).await {
         Ok(status) => status?,
         Err(_) => {
             let _ = child.kill().await;

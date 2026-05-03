@@ -1,12 +1,15 @@
 use crate::auth::{AuthManager, AuthSource};
 use crate::config;
 use anyhow::Result;
-use serde::Deserialize;
+use comfy_table::modifiers::UTF8_ROUND_CORNERS;
+use comfy_table::presets::UTF8_FULL;
+use comfy_table::{Cell, ContentArrangement, Table};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 // ── API response types ───────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct Organization {
     _id: String,
     name: String,
@@ -18,7 +21,7 @@ struct OrganizationsResponse {
     organizations: Vec<Organization>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct Game {
     _id: String,
     title: String,
@@ -478,5 +481,57 @@ pub async fn handle_project_create(title: &str, team_id: &str) -> Result<()> {
         "  {}/dev-portal/{}/{}",
         website_host, team.slug, project.slug
     );
+    Ok(())
+}
+
+pub async fn handle_team_list(json: bool) -> Result<()> {
+    let api_key = require_api_key()?;
+    let orgs = fetch_organizations(&api_key).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&orgs)?);
+        return Ok(());
+    }
+    if orgs.is_empty() {
+        println!("No teams found.");
+        return Ok(());
+    }
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .apply_modifier(UTF8_ROUND_CORNERS)
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(vec![Cell::new("ID"), Cell::new("Slug"), Cell::new("Name")]);
+    for org in orgs {
+        table.add_row(vec![org._id, org.slug, org.name]);
+    }
+    println!("{table}");
+    Ok(())
+}
+
+pub async fn handle_project_list(team_id: &str, json: bool) -> Result<()> {
+    let api_key = require_api_key()?;
+    let games = fetch_games(&api_key, team_id).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&games)?);
+        return Ok(());
+    }
+    if games.is_empty() {
+        println!("No games found for team {}.", team_id);
+        return Ok(());
+    }
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .apply_modifier(UTF8_ROUND_CORNERS)
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(vec![
+            Cell::new("ID"),
+            Cell::new("Slug"),
+            Cell::new("Title"),
+        ]);
+    for game in games {
+        table.add_row(vec![game._id, game.slug, game.title]);
+    }
+    println!("{table}");
     Ok(())
 }

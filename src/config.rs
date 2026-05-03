@@ -106,21 +106,25 @@ pub async fn check_api_response(response: reqwest::Response) -> Result<reqwest::
 
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
         if let Some(msg) = parsed["error"].as_str() {
-            match (status, msg) {
-                (404, _) | (_, "Game not found") => {
+            let code = parsed["code"].as_str();
+            match (status, msg, code) {
+                (404, _, _) | (_, "Game not found", _) => {
                     anyhow::bail!(
                         "Game not found. The game_id in your wavedash.toml may be incorrect.\nRun `wavedash init` to reconfigure."
                     );
                 }
-                (403, _) | (_, "Access denied") => {
+                (403, _, _) | (_, "Access denied", _) => {
                     anyhow::bail!(
                         "Access denied. You don't have permission to access this game.\nCheck that you're logged in with the right account (`wavedash auth status`)."
                     );
                 }
-                (401, _) => {
+                (401, _, _) => {
                     anyhow::bail!(
                         "Authentication failed. Run `wavedash auth login` to re-authenticate."
                     );
+                }
+                (_, _, Some("requires_force")) => {
+                    anyhow::bail!("{} Pass --force to delete it anyway.", msg);
                 }
                 _ => anyhow::bail!("{}", msg),
             }
@@ -190,6 +194,23 @@ impl EngineKind {
             EngineKind::Ruffle => "RUFFLE",
         }
     }
+}
+
+/// Resolve a game_id by preferring the CLI-provided value, otherwise loading
+/// `game_id` from the wavedash.toml at `config_path`. Errors include the
+/// config path so the user knows which file we tried to read.
+pub fn resolve_game_id(cli_game_id: Option<&str>, config_path: &PathBuf) -> Result<String> {
+    if let Some(id) = cli_game_id {
+        return Ok(id.to_string());
+    }
+    let config = WavedashConfig::load(config_path).map_err(|e| {
+        anyhow::anyhow!(
+            "No --game-id provided and could not read game_id from {}: {}",
+            config_path.display(),
+            e
+        )
+    })?;
+    Ok(config.game_id)
 }
 
 impl WavedashConfig {

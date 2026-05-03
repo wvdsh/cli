@@ -53,7 +53,7 @@ async fn get_temp_credentials(
     );
 
     let mut request_body = serde_json::json!({
-        "buildSizeBytes": build_size_bytes
+        "buildSizeBytes": build_size_bytes,
     });
 
     if let Some(eng) = engine {
@@ -186,12 +186,8 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
         .await?;
 
     // Notify the server that upload is complete
-    let result = notify_upload_complete(
-        &wavedash_config.game_id,
-        &creds.game_build_id,
-        &api_key,
-    )
-    .await?;
+    let result =
+        notify_upload_complete(&wavedash_config.game_id, &creds.game_build_id, &api_key).await?;
 
     // Print the play URL
     let site_host = config::get("open_browser_website_host")?;

@@ -1,18 +1,28 @@
+mod achievements;
 mod auth;
 mod builds;
 mod config;
 mod dev;
 mod file_staging;
 mod init;
+mod stats;
 mod updater;
 
+use achievements::{
+    handle_achievement_create, handle_achievement_delete, handle_achievement_update,
+    CreateAchievementArgs, UpdateAchievementArgs,
+};
 use anyhow::Result;
 use auth::{login_with_browser, AuthManager, AuthSource};
 use builds::handle_build_push;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
+use config::resolve_game_id;
 use dev::handle_dev;
-use init::{handle_init, handle_project_create, handle_team_create};
+use init::{
+    handle_init, handle_project_create, handle_project_list, handle_team_create, handle_team_list,
+};
+use stats::{handle_stat_create, handle_stat_delete, handle_stat_update};
 use std::path::PathBuf;
 
 fn mask_token(token: &str) -> String {
@@ -62,6 +72,14 @@ enum Commands {
         #[command(subcommand)]
         action: ProjectCommands,
     },
+    Stat {
+        #[command(subcommand)]
+        action: StatCommands,
+    },
+    Achievement {
+        #[command(subcommand)]
+        action: AchievementCommands,
+    },
     #[command(about = "Check for and install updates")]
     Update,
 }
@@ -98,6 +116,11 @@ enum TeamCommands {
         #[arg(long, help = "Team name")]
         name: String,
     },
+    #[command(about = "List your teams")]
+    List {
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -108,6 +131,177 @@ enum ProjectCommands {
         title: String,
         #[arg(long = "team-id", help = "Team ID")]
         team_id: String,
+    },
+    #[command(about = "List projects (games) for a team")]
+    List {
+        #[arg(long = "team-id", help = "Team ID")]
+        team_id: String,
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum StatCommands {
+    #[command(about = "Create a new stat for a game")]
+    Create {
+        #[arg(
+            long = "game-id",
+            help = "Game ID (defaults to game_id in wavedash.toml)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(long, help = "Stat identifier (e.g. KILLS_TOTAL)")]
+        identifier: String,
+        #[arg(long, help = "Stat display name")]
+        name: String,
+    },
+    #[command(about = "Update a stat's identifier and display name")]
+    Update {
+        #[arg(
+            long = "game-id",
+            help = "Game ID (defaults to game_id in wavedash.toml)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(long, help = "Stat ID")]
+        id: String,
+        #[arg(long, help = "New identifier (e.g. KILLS_TOTAL)")]
+        identifier: String,
+        #[arg(long, help = "New display name")]
+        name: String,
+    },
+    #[command(about = "Delete a stat")]
+    Delete {
+        #[arg(
+            long = "game-id",
+            help = "Game ID (defaults to game_id in wavedash.toml)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(long, help = "Stat ID")]
+        id: String,
+        #[arg(long, help = "Required if any user progress is attached to this stat")]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum AchievementCommands {
+    #[command(about = "Create a new achievement for a game")]
+    Create {
+        #[arg(
+            long = "game-id",
+            help = "Game ID (defaults to game_id in wavedash.toml)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(long, help = "Achievement identifier (e.g. FIRST_WIN)")]
+        identifier: String,
+        #[arg(long, help = "Achievement title (display name)")]
+        title: String,
+        #[arg(long, help = "Achievement description")]
+        description: String,
+        #[arg(long, help = "Mark the achievement as secret", default_value_t = false)]
+        secret: bool,
+        #[arg(
+            long = "triggered-by-stat-id",
+            help = "Stat ID that triggers this achievement (omit for a standard achievement)"
+        )]
+        triggered_by_stat_id: Option<String>,
+        #[arg(
+            long,
+            help = "Stat threshold required to unlock (required when --triggered-by-stat-id is set)"
+        )]
+        threshold: Option<f64>,
+        #[arg(
+            long,
+            help = "Path to an image file (jpg, jpeg, png, webp) to use as the achievement icon"
+        )]
+        image: Option<PathBuf>,
+    },
+    #[command(about = "Update an achievement")]
+    Update {
+        #[arg(
+            long = "game-id",
+            help = "Game ID (defaults to game_id in wavedash.toml)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(long, help = "Achievement ID")]
+        id: String,
+        #[arg(long, help = "New identifier (e.g. FIRST_WIN)")]
+        identifier: Option<String>,
+        #[arg(long, help = "New title (display name)")]
+        title: Option<String>,
+        #[arg(long, help = "New description")]
+        description: Option<String>,
+        #[arg(long, help = "Mark/unmark as secret")]
+        secret: Option<bool>,
+        #[arg(
+            long = "triggered-by-stat-id",
+            help = "Stat ID that triggers this achievement (pass empty string \"\" to clear)"
+        )]
+        triggered_by_stat_id: Option<String>,
+        #[arg(long, help = "Stat threshold")]
+        threshold: Option<f64>,
+        #[arg(
+            long,
+            help = "Path to a new image file (jpg, jpeg, png, webp)"
+        )]
+        image: Option<PathBuf>,
+    },
+    #[command(about = "Delete an achievement")]
+    Delete {
+        #[arg(
+            long = "game-id",
+            help = "Game ID (defaults to game_id in wavedash.toml)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(long, help = "Achievement ID")]
+        id: String,
+        #[arg(
+            long,
+            help = "Required if any user has unlocked this achievement"
+        )]
+        force: bool,
     },
 }
 
@@ -202,10 +396,115 @@ async fn run() -> Result<()> {
             TeamCommands::Create { name } => {
                 handle_team_create(&name).await?;
             }
+            TeamCommands::List { json } => {
+                handle_team_list(json).await?;
+            }
         },
         Commands::Project { action } => match action {
             ProjectCommands::Create { title, team_id } => {
                 handle_project_create(&title, &team_id).await?;
+            }
+            ProjectCommands::List { team_id, json } => {
+                handle_project_list(&team_id, json).await?;
+            }
+        },
+        Commands::Stat { action } => match action {
+            StatCommands::Create {
+                game_id,
+                config,
+                identifier,
+                name,
+            } => {
+                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                handle_stat_create(&game_id, &identifier, &name).await?;
+            }
+            StatCommands::Update {
+                game_id,
+                config,
+                id,
+                identifier,
+                name,
+            } => {
+                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                handle_stat_update(&game_id, &id, &identifier, &name).await?;
+            }
+            StatCommands::Delete {
+                game_id,
+                config,
+                id,
+                force,
+            } => {
+                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                handle_stat_delete(&game_id, &id, force).await?;
+            }
+        },
+        Commands::Achievement { action } => match action {
+            AchievementCommands::Create {
+                game_id,
+                config,
+                identifier,
+                title,
+                description,
+                secret,
+                triggered_by_stat_id,
+                threshold,
+                image,
+            } => {
+                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                handle_achievement_create(CreateAchievementArgs {
+                    game_id: &game_id,
+                    identifier: &identifier,
+                    title: &title,
+                    description: &description,
+                    secret,
+                    triggered_by_stat_id: triggered_by_stat_id.as_deref(),
+                    stat_threshold: threshold,
+                    image_path: image.as_deref(),
+                })
+                .await?;
+            }
+            AchievementCommands::Update {
+                game_id,
+                config,
+                id,
+                identifier,
+                title,
+                description,
+                secret,
+                triggered_by_stat_id,
+                threshold,
+                image,
+            } => {
+                // CLI convention: --triggered-by-stat-id "" clears, omitted leaves alone
+                let triggered: Option<Option<&str>> = triggered_by_stat_id.as_deref().map(|s| {
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                });
+                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                handle_achievement_update(UpdateAchievementArgs {
+                    game_id: &game_id,
+                    achievement_id: &id,
+                    title: title.as_deref(),
+                    identifier: identifier.as_deref(),
+                    description: description.as_deref(),
+                    secret,
+                    triggered_by_stat_id: triggered,
+                    stat_threshold: threshold,
+                    image_path: image.as_deref(),
+                })
+                .await?;
+            }
+            AchievementCommands::Delete {
+                game_id,
+                config,
+                id,
+                force,
+            } => {
+                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                handle_achievement_delete(&game_id, &id, force).await?;
             }
         },
         Commands::Update => {
