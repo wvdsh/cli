@@ -75,7 +75,11 @@ pub async fn run_update() -> Result<()> {
             .build()?
             .update()?;
 
-        println!("✓ Updated to version {}", status.version());
+        if status.updated() {
+            println!("✓ Updated to version {}", status.version());
+        } else {
+            println!("✓ Already on latest version ({})", status.version());
+        }
         Ok::<(), anyhow::Error>(())
     })
     .await??;
