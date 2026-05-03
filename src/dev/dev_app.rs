@@ -224,7 +224,46 @@ async fn ensure_installed() -> Result<PathBuf> {
             exe.display()
         );
     }
+
+    if let Err(e) = cleanup_old_versions() {
+        eprintln!(
+            "warning: failed to clean up old Wavedash dev-app versions: {}",
+            e
+        );
+    }
+
     Ok(exe)
+}
+
+/// Remove every `~/.wavedash/dev-app/<version>/` directory except the one
+/// matching the current CLI version. Best-effort: per-entry failures are
+/// logged but do not abort install.
+fn cleanup_old_versions() -> Result<()> {
+    let parent = config::wavedash_dir()?.join("dev-app");
+    if !parent.is_dir() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(&parent)? {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        if entry.file_name() == DEV_APP_VERSION {
+            continue;
+        }
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let path = entry.path();
+        if let Err(e) = std::fs::remove_dir_all(&path) {
+            eprintln!(
+                "warning: failed to remove old dev-app version at {}: {}",
+                path.display(),
+                e
+            );
+        }
+    }
+    Ok(())
 }
 
 fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {

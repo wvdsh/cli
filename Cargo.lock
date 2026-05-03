@@ -2426,6 +2426,7 @@ dependencies = [
  "tempfile",
  "ureq",
  "urlencoding",
+ "zip 6.0.0",
  "zipsign-api",
 ]
 
@@ -3279,7 +3280,7 @@ dependencies = [
 
 [[package]]
 name = "wavedash"
-version = "0.1.73"
+version = "0.1.74"
 dependencies = [
  "anyhow",
  "axum",
@@ -3309,7 +3310,7 @@ dependencies = [
  "url",
  "urlencoding",
  "walkdir",
- "zip",
+ "zip 2.4.2",
 ]
 
 [[package]]
@@ -3865,6 +3866,19 @@ dependencies = [
  "zeroize",
  "zopfli",
  "zstd",
+]
+
+[[package]]
+name = "zip"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb2a05c7c36fde6c09b08576c9f7fb4cda705990f73b58fe011abf7dfb24168b"
+dependencies = [
+ "arbitrary",
+ "crc32fast",
+ "indexmap",
+ "memchr",
+ "time",
 ]
 
 [[package]]
