@@ -84,6 +84,21 @@ fn install_dir() -> Result<PathBuf> {
         .join(platform_folder()?))
 }
 
+/// True if any dev-app version other than the current one is already cached —
+/// used to distinguish a first-time download from an update.
+fn has_prior_version(current_install_dir: &Path) -> bool {
+    let Some(versions_root) = current_install_dir.parent().and_then(Path::parent) else {
+        return false;
+    };
+    let Ok(entries) = std::fs::read_dir(versions_root) else {
+        return false;
+    };
+    entries.flatten().any(|e| {
+        e.file_type().map(|t| t.is_dir()).unwrap_or(false)
+            && e.file_name() != DEV_APP_VERSION
+    })
+}
+
 fn dev_app_executable() -> Result<PathBuf> {
     let base = install_dir()?;
     let rel: PathBuf = match std::env::consts::OS {
@@ -143,6 +158,7 @@ async fn ensure_installed() -> Result<PathBuf> {
     }
 
     let dir = install_dir()?;
+    let is_update = has_prior_version(&dir);
     std::fs::create_dir_all(&dir).with_context(|| {
         format!("Failed to create dev-app directory at {}", dir.display())
     })?;
@@ -174,7 +190,11 @@ async fn ensure_installed() -> Result<PathBuf> {
                 .unwrap()
                 .progress_chars("=>-"),
         );
-        pb.set_message("Downloading Wavedash dev-app...");
+        pb.set_message(if is_update {
+            "Updating Wavedash dev-app..."
+        } else {
+            "Downloading Wavedash dev-app..."
+        });
         pb.enable_steady_tick(Duration::from_millis(100));
         Some(pb)
     } else {
