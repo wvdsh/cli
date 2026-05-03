@@ -871,6 +871,7 @@ checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -3280,7 +3281,7 @@ dependencies = [
 
 [[package]]
 name = "wavedash"
-version = "0.1.75"
+version = "0.1.76"
 dependencies = [
  "anyhow",
  "axum",
@@ -3876,9 +3877,11 @@ checksum = "eb2a05c7c36fde6c09b08576c9f7fb4cda705990f73b58fe011abf7dfb24168b"
 dependencies = [
  "arbitrary",
  "crc32fast",
+ "flate2",
  "indexmap",
  "memchr",
  "time",
+ "zopfli",
 ]
 
 [[package]]
@@ -3891,6 +3894,12 @@ dependencies = [
  "ed25519-dalek",
  "thiserror 2.0.17",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3be3d40e40a133f9c916ee3f9f4fa2d9d63435b5fbe1bfc6d9dae0aa0ada1513"
 
 [[package]]
 name = "zopfli"
