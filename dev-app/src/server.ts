@@ -44,25 +44,15 @@ const PASSTHROUGH_PREFIXES = [
   "/embed.js",
   "/embed.css",
   "/default-entrypoints/",
+  "/auth/refresh",
+  "/local-embed",
 ];
 
+// Mirrors the bootstrap tag the play worker injects into prod CUSTOM-HTML
+// builds (play/src/server/handlers/embed.tsx). Local builds get redirected
+// from /local-embed to /<entrypoint> after cookie planting; we inject the
+// SDK bootstrap here as the file is served from disk.
 const EMBED_BOOTSTRAP_TAG = '<script src="/embed.js?v=local"></script>';
-
-// Match cli/src/dev/interceptor.rs::default_embed_shell.
-const DEFAULT_EMBED_SHELL = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<meta name="color-scheme" content="light dark" />
-<title>Wavedash Embed</title>
-<link rel="stylesheet" href="/embed.css?v=local" />
-</head>
-<body class="overflow-hidden">
-<div id="app" data-wavedash></div>
-<script defer src="/embed.js?v=local"></script>
-</body>
-</html>`;
 
 /** Per-request access log (vite/caddy style). serve_local lines are always
  *  on; synth/passthrough are gated behind --verbose at the call sites. */
@@ -128,12 +118,6 @@ async function handle(
   const urlPath = url.pathname;
 
   try {
-    if (urlPath === "/dev-app-embed") {
-      if (config.verbose) log("synth /dev-app-embed");
-      serveEmbedShell(res, config.uploadDir, url);
-      return;
-    }
-
     if (isPassthroughPath(urlPath)) {
       if (config.verbose) {
         log(
@@ -167,45 +151,6 @@ function isPassthroughPath(p: string): boolean {
   return PASSTHROUGH_PREFIXES.some((prefix) => p.startsWith(prefix));
 }
 
-function serveEmbedShell(
-  res: http.ServerResponse,
-  uploadDir: string,
-  url: URL,
-): void {
-  const engine = url.searchParams.get("engine");
-  const entrypoint = url.searchParams.get("entrypoint");
-
-  // Default entrypoint is index.html when CUSTOM has no explicit entrypoint.
-  const isCustomHtml =
-    engine === "CUSTOM" &&
-    (entrypoint === null ||
-      entrypoint.endsWith(".html") ||
-      entrypoint.endsWith(".htm"));
-
-  let html: string;
-  if (isCustomHtml) {
-    const entry = entrypoint ?? "index.html";
-    try {
-      html = injectEmbedBootstrap(readCustomHtml(uploadDir, entry));
-    } catch (err) {
-      process.stderr.write(
-        `Failed to read custom HTML ${entry}: ${String(err)}\n`,
-      );
-      sendNotFound(res);
-      return;
-    }
-  } else {
-    html = DEFAULT_EMBED_SHELL;
-  }
-
-  res.statusCode = 200;
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Cache-Control", "no-store");
-  setIframeOriginHeaders(res);
-  res.setHeader("Referrer-Policy", "strict-origin");
-  res.setHeader("X-Robots-Tag", "noindex, nofollow");
-  res.end(html);
-}
 
 /**
  * Headers every response on the game subdomain must carry. Mirrors the
@@ -324,6 +269,34 @@ function serveLocalFile(
   }
 
   const { contentType, contentEncoding } = resolveContentType(urlPath);
+
+  // CUSTOM-HTML iframe path: /local-embed redirects (302) to /<entrypoint>,
+  // and the browser fetches the file from us. Inject the SDK bootstrap into
+  // text/html responses so the developer's HTML behaves like a prod CUSTOM
+  // build (where play/src/server/handlers/embed.tsx injects on the way out
+  // of R2). Content-Encoding-coded responses (.html.gz) skip injection —
+  // we'd have to decompress to mutate, and HTML is rarely pre-compressed
+  // in dev builds.
+  const isHtml =
+    !contentEncoding && contentType.startsWith("text/html");
+  if (isHtml) {
+    let body: string;
+    try {
+      body = fs.readFileSync(filePath, "utf8");
+    } catch (err) {
+      process.stderr.write(`read error for ${urlPath}: ${String(err)}\n`);
+      sendNotFound(res);
+      return;
+    }
+    const injected = injectEmbedBootstrap(body);
+    res.statusCode = 200;
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    setIframeOriginHeaders(res);
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Length", Buffer.byteLength(injected));
+    res.end(injected);
+    return;
+  }
 
   res.statusCode = 200;
   res.setHeader("Access-Control-Allow-Origin", "*");
