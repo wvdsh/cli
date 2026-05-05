@@ -307,7 +307,7 @@ async function bootstrap(): Promise<void> {
   // content-box` injected so the padding area stays transparent and the
   // vibrancy shows through. No `backgroundColor` here — vibrancy provides
   // it, and `show: false` + `ready-to-show` masks the brief pre-paint.
-  const TITLEBAR_STRIP_PX = 38;
+  const TITLEBAR_STRIP_PX = 24;
   const window = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -338,12 +338,20 @@ async function bootstrap(): Promise<void> {
   // !important on body rules: 'user' origin still loses to author rules in
   // the cascade unless flagged important; wavedash's Tailwind preflight
   // touches body and would otherwise win.
+  // Body padding handles in-flow content, but `position: fixed` ignores it
+  // (fixed elements are anchored to the viewport, not the body's content
+  // box). Wavedash's SiteHeader is `<header class="fixed top-0 ...">`, so
+  // we additionally shift any fixed top:0 <header>/<nav> down by the strip.
+  // Scoped to header/nav to avoid moving modals, dropdowns, and popovers.
   const FADE_CSS = `
     html { opacity: 0; transition: opacity 220ms ease-out; }
     html.app-ready { opacity: 1; }
     body {
       padding-top: ${TITLEBAR_STRIP_PX}px !important;
       background-clip: content-box !important;
+    }
+    :is(header, nav)[class*="fixed"][class*="top-0"] {
+      top: ${TITLEBAR_STRIP_PX}px !important;
     }
     body::before {
       content: '';
