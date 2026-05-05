@@ -140,13 +140,13 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
     .await?;
 
     let site_host = config::get("open_browser_website_host")?;
-    let mainsite_host = site_host
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    // Iframe origin is `<gameId>.local.<mainsite>` — must match
-    // GameRunnerComponent's `gameplayOrigin`, which uses the Convex game `_id`
-    // (i.e. wavedash.toml's `game_id`), not the slug.
-    let game_subdomain = format!("{}.local.{}", wavedash_config.game_id, mainsite_host);
+    let playsite_host = config::get("playsite_host")?;
+    // Iframe origin is `<gameId>.local.<playsite_host>` — must match
+    // GameRunnerComponent's `gameplayOrigin`, which builds the same string
+    // from PUBLIC_PLAYSITE_HOST and the Convex game `_id` (i.e. wavedash.toml's
+    // `game_id`, not the slug). The mainsite and playsite TLDs are split
+    // (wavedash.com vs wavedashcdn.com), so this MUST be the playsite.
+    let game_subdomain = format!("{}.local.{}", wavedash_config.game_id, playsite_host);
 
     let playtest_url = format!(
         "{}/playtest/{}/{}",

@@ -16,6 +16,7 @@ pub fn wavedash_dir() -> Result<PathBuf> {
 #[derive(Deserialize)]
 struct Config {
     open_browser_website_host: String,
+    playsite_host: String,
     api_host: String,
     cf_access_client_id: Option<String>,
     cf_access_client_secret: Option<String>,
@@ -33,6 +34,7 @@ impl Config {
 
         Ok(Config {
             open_browser_website_host: site_host,
+            playsite_host: env!("PLAYSITE_HOST").to_string(),
             api_host: env!("CONVEX_HTTP_URL").to_string(),
             cf_access_client_id: option_env!("CF_ACCESS_CLIENT_ID").map(|s| s.to_string()),
             cf_access_client_secret: option_env!("CF_ACCESS_CLIENT_SECRET").map(|s| s.to_string()),
@@ -44,6 +46,7 @@ pub fn get(key: &str) -> Result<String> {
     let config = Config::load()?;
     match key {
         "open_browser_website_host" => Ok(config.open_browser_website_host),
+        "playsite_host" => Ok(config.playsite_host),
         "api_host" => Ok(config.api_host),
         _ => anyhow::bail!("Unknown config key: {}", key),
     }

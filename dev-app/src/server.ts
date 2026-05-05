@@ -155,6 +155,7 @@ async function handle(
     if (!res.headersSent) {
       res.statusCode = 500;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      setIframeOriginHeaders(res);
       res.end("Internal Server Error");
     } else {
       res.end();
@@ -200,12 +201,28 @@ function serveEmbedShell(
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
-  res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
-  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-  res.setHeader("Cross-Origin-Resource-Policy", "same-site");
+  setIframeOriginHeaders(res);
   res.setHeader("Referrer-Policy", "strict-origin");
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
   res.end(html);
+}
+
+/**
+ * Headers every response on the game subdomain must carry. Mirrors the
+ * production play worker (`play/src/server/index.ts`).
+ *
+ * - `Origin-Agent-Cluster: ?1` is sticky per origin per BrowsingContextGroup,
+ *   so a single response without it locks the origin into site-keyed mode for
+ *   the rest of the chromium session and breaks `crossOriginIsolated`.
+ * - `Cross-Origin-Resource-Policy: cross-origin` is required because the
+ *   mainsite (which sets COEP=require-corp) is on a different site than the
+ *   playsite (wavedash.com vs wavedashcdn.com, and likewise in dev).
+ */
+function setIframeOriginHeaders(res: http.ServerResponse): void {
+  res.setHeader("Origin-Agent-Cluster", "?1");
+  res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
 }
 
 function readCustomHtml(uploadDir: string, entrypoint: string): string {
@@ -310,9 +327,7 @@ function serveLocalFile(
 
   res.statusCode = 200;
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
-  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  setIframeOriginHeaders(res);
   res.setHeader("Content-Type", contentType);
   if (contentEncoding) {
     res.setHeader("Content-Encoding", contentEncoding);
@@ -330,6 +345,7 @@ function serveLocalFile(
 function sendNotFound(res: http.ServerResponse): void {
   res.statusCode = 404;
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  setIframeOriginHeaders(res);
   res.end("Not Found");
 }
 
@@ -466,6 +482,7 @@ async function proxyToOrigin(
       if (!res.headersSent) {
         res.statusCode = 502;
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        setIframeOriginHeaders(res);
         res.end("Bad Gateway");
       } else {
         res.destroy();

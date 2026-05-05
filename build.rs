@@ -5,6 +5,11 @@ fn main() {
     // Required config vars - must be set either by Doppler or .env
     let required = [
         "SITE_HOST",
+        // Host that serves game iframes (e.g. wavedashcdn.com). Mirrors the
+        // mainsite's PUBLIC_PLAYSITE_HOST — must match, since the iframe
+        // origin is `<gameId>.local.<PLAYSITE_HOST>` and `wavedash dev` maps
+        // that subdomain to the local server via chromium --host-rules.
+        "PLAYSITE_HOST",
         "CONVEX_HTTP_URL",
         // Public host of the wavedash-dev-app R2 bucket (e.g. r2.dev URL or
         // a custom domain). Baked in here so `wavedash dev` always knows
@@ -40,6 +45,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed=.env");
     println!("cargo:rerun-if-env-changed=SITE_HOST");
+    println!("cargo:rerun-if-env-changed=PLAYSITE_HOST");
     println!("cargo:rerun-if-env-changed=CONVEX_HTTP_URL");
     println!("cargo:rerun-if-env-changed=CF_ACCESS_CLIENT_ID");
     println!("cargo:rerun-if-env-changed=CF_ACCESS_CLIENT_SECRET");
