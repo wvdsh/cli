@@ -68,7 +68,7 @@ async fn get_temp_credentials(
         request_body["entrypoint"] = serde_json::json!(ep);
     }
 
-    // Add entrypointParams if provided (for JSDOS/Ruffle)
+    // Add entrypointParams if provided (for JSDOS/Ruffle/Ren'Py)
     if let Some(ep_params) = entrypoint_params {
         request_body["entrypointParams"] = ep_params;
     }

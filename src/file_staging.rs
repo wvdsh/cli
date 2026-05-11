@@ -32,7 +32,7 @@ impl FileStaging {
             }
         }
 
-        // Validate executable and loader_url files exist (for JSDOS/Ruffle)
+        // Validate executable and loader_url files exist (for JSDOS/Ruffle/Ren'Py)
         for file in wavedash_config.executable_files_to_validate() {
             let file_path = upload_dir.join(file);
             if !file_path.exists() {
