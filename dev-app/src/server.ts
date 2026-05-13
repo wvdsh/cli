@@ -43,6 +43,7 @@ export interface StartedServer {
 const PASSTHROUGH_PREFIXES = [
   "/embed.js",
   "/embed.css",
+  "/renpy-loader.js",
   "/default-entrypoints/",
   "/auth/refresh",
   "/local-embed",
@@ -53,6 +54,12 @@ const PASSTHROUGH_PREFIXES = [
 // from /local-embed to /<entrypoint> after cookie planting; we inject the
 // SDK bootstrap here as the file is served from disk.
 const EMBED_BOOTSTRAP_TAG = '<script src="/embed.js?v=local"></script>';
+// Order is load-bearing: the loader shim installs setters on window.progress /
+// Module.print / window.presplashEnd that must wrap renpy-pre.js's assignments,
+// and depends on window.Wavedash existing from the SDK bootstrap.
+const RENPY_ENGINE = "RENPY";
+const RENPY_LOADER_TAG = '<script src="/renpy-loader.js?v=local"></script>';
+const EMBED_BOOTSTRAP_WITH_RENPY = EMBED_BOOTSTRAP_TAG + RENPY_LOADER_TAG;
 
 /** Per-request access log (vite/caddy style). serve_local lines are always
  *  on; synth/passthrough are gated behind --verbose at the call sites. */
@@ -130,7 +137,7 @@ async function handle(
       return;
     }
 
-    serveLocalFile(res, config.uploadDir, urlPath);
+    serveLocalFile(res, config.uploadDir, urlPath, url.searchParams);
     logServed(res, config.gameSubdomain + urlPath);
   } catch (err) {
     process.stderr.write(
@@ -191,12 +198,13 @@ function readCustomHtml(uploadDir: string, entrypoint: string): string {
   return fs.readFileSync(filePath, "utf8");
 }
 
-function injectEmbedBootstrap(html: string): string {
+function injectEmbedBootstrap(html: string, isRenpy: boolean): string {
+  const tag = isRenpy ? EMBED_BOOTSTRAP_WITH_RENPY : EMBED_BOOTSTRAP_TAG;
   const idx = findHeadOpen(html);
   if (idx !== null) {
-    return html.slice(0, idx) + EMBED_BOOTSTRAP_TAG + html.slice(idx);
+    return html.slice(0, idx) + tag + html.slice(idx);
   }
-  return EMBED_BOOTSTRAP_TAG + html;
+  return tag + html;
 }
 
 /** Returns the index right after the first `<head ...>` open tag, or null. */
@@ -230,6 +238,7 @@ function serveLocalFile(
   res: http.ServerResponse,
   uploadDir: string,
   urlPath: string,
+  searchParams: URLSearchParams,
 ): void {
   let relative = urlPath.replace(/^\/+/, "");
   try {
@@ -288,7 +297,8 @@ function serveLocalFile(
       sendNotFound(res);
       return;
     }
-    const injected = injectEmbedBootstrap(body);
+    const isRenpy = searchParams.get("engine") === RENPY_ENGINE;
+    const injected = injectEmbedBootstrap(body, isRenpy);
     res.statusCode = 200;
     res.setHeader("Access-Control-Allow-Origin", "*");
     setIframeOriginHeaders(res);
