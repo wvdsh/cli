@@ -109,17 +109,20 @@ async function handle(
   res: http.ServerResponse,
   config: ServerConfig,
 ): Promise<void> {
-  // SNI is honored by https.createServer, so req.headers.host carries the
-  // browser-facing host (the game subdomain). chromium's host-rules MAP
-  // always sets it; we reject anything missing rather than guessing.
+  // Host header is the browser-facing `{gcid}-{userhash}.<localHostSuffix>`.
   const hostHeader = req.headers.host;
   if (!hostHeader) {
     res.statusCode = 400;
     res.end("Missing Host header");
     return;
   }
-  // Strip the optional `:port` so the proxy origin and logs use the bare host.
   const originHost = hostHeader.split(":")[0];
+  // Defense-in-depth: pin the upstream `proxyToOrigin` sees to our suffix.
+  if (!originHost.endsWith(`.${config.localHostSuffix}`)) {
+    res.statusCode = 400;
+    res.end("Unexpected Host");
+    return;
+  }
   const url = new URL(req.url ?? "/", `https://${hostHeader}`);
   const urlPath = url.pathname;
 
@@ -159,7 +162,8 @@ function isPassthroughPath(p: string): boolean {
 
 
 /**
- * Headers every response on the game subdomain must carry.
+ * Mirrors the play worker: OAC=?1 (sticky per BrowsingContextGroup, lock-in
+ * if ever absent), CORP=cross-origin for the mainsite/playsite split.
  */
 function setIframeOriginHeaders(res: http.ServerResponse): void {
   res.setHeader("Origin-Agent-Cluster", "?1");

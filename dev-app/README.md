@@ -6,16 +6,19 @@ and execs the binary directly.
 
 ## Layout
 
-- `src/main.ts` — process entry. Reads JSON config from stdin, starts the
-  local HTTPS server, points Chromium at it via `--host-rules`, and
-  navigates to the playtest URL.
-- `src/server.ts` — local HTTPS server. Handles requests for the game
-  subdomain: synthesizes the `/dev-app-embed` shell, serves files from the upload
-  dir with COEP/COOP/CORP, and reverse-proxies a fixed set of paths
-  (`/embed.js`, `/auth/`, `/gameplay/`, …) to the real network.
-- `src/cert.ts` — generates a self-signed cert at startup. The cert is
-  whitelisted via `session.setCertificateVerifyProc` for the game
-  subdomain only, so DevTools network is unaffected.
+- `src/main.ts` — process entry. Reads JSON config from the temp file at
+  `--config-path=<path>` (CLI also passes `--user-data-dir` and
+  `--parent-pid`), starts the local HTTPS server, points Chromium at it
+  via `--host-rules`, and navigates to the playtest URL.
+- `src/server.ts` — local HTTPS server. Handles requests for any
+  `{gcid}-{userhash}.<localHostSuffix>` host: synthesizes the
+  `/dev-app-embed` shell, serves files from the upload dir with
+  COEP/COOP/CORP, and reverse-proxies a fixed set of paths (`/embed.js`,
+  `/sw-bootstrap`, `/auth/refresh`, …) to the real network.
+- `src/cert.ts` — generates a self-signed cert at startup with a wildcard
+  SAN `*.<localHostSuffix>`. The cert is whitelisted via
+  `session.setCertificateVerifyProc` for any host under that suffix only,
+  so DevTools network is unaffected.
 - `electron-builder.json5` — produces `<productName>-<version>-<os>-<arch>.zip`
   per platform. The release workflow renames each to `<platform>.zip`.
 
@@ -24,9 +27,9 @@ and execs the binary directly.
 Electron's `webContents.debugger` and bundled DevTools share a single CDP
 slot. While the debugger is attached with `Fetch.enable`, the bundled
 DevTools' Network tab is broken (and opening DevTools detaches our
-debugger). Routing the game subdomain through a real local HTTPS server
-keeps Chromium's network stack untouched, so right-click → Inspect Element
-opens DevTools with full Network/Performance panels.
+debugger). Routing the wildcard `*.<localHostSuffix>` through a real local
+HTTPS server keeps Chromium's network stack untouched, so right-click →
+Inspect Element opens DevTools with full Network/Performance panels.
 
 ## No code signing
 
@@ -81,16 +84,24 @@ bundler doesn't typecheck, it just transpiles.
 
 ## IPC contract
 
-CLI → dev-app over **stdin** — one JSON line:
+CLI → dev-app via the temp file at `--config-path=<path>` — one JSON
+object. Stdin is intentionally unused (Windows GUI-subsystem .exes detach
+from inherited stdin pipes):
 
 ```json
 {
   "uploadDir": "/abs/path",
-  "gameSubdomain": "<gameCloudId>-<userHash>.local.wavedashcdn.com",
+  "localHostSuffix": "local.wavedashcdn.com",
   "playtestUrl": "https://wavedash.com/playtest/<slug>/<uuid>",
   "verbose": false
 }
 ```
+
+The dev-app reads it synchronously at startup and unlinks the file.
+`localHostSuffix` is the **shared suffix** for every iframe origin the
+mainsite may navigate to (`{gcid}-{userhash}.<localHostSuffix>`); the
+dev-app uses a wildcard for cert SAN, `--host-rules` MAP, and the
+cert-verify check.
 
 Dev-app → CLI over **stdout** — one JSON object per line:
 
@@ -100,5 +111,6 @@ Dev-app → CLI over **stdout** — one JSON object per line:
 stderr: server access log (one line per intercepted request) plus errors.
 Always forwarded by the CLI; `--verbose` only adds CLI-side noise.
 
-Closing stdin from the CLI side signals the dev-app to quit (used for
-clean Ctrl+C shutdown).
+Shutdown: on Ctrl+C the CLI kills the child directly. The dev-app also
+polls `--parent-pid=<pid>` every second and quits if the CLI process is
+gone, so a CLI crash doesn't leave an orphan.
