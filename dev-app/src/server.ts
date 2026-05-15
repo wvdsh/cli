@@ -43,15 +43,19 @@ export interface StartedServer {
 const PASSTHROUGH_PREFIXES = [
   "/embed.js",
   "/embed.css",
+  "/sw-embed.js",
   "/default-entrypoints/",
   "/auth/refresh",
+  "/sw-bootstrap",
   "/local-embed",
 ];
 
 // Mirrors the bootstrap tag the play worker injects into prod CUSTOM-HTML
-// builds (play/src/server/handlers/embed.tsx). Local builds get redirected
-// from /local-embed to /<entrypoint> after cookie planting; we inject the
-// SDK bootstrap here as the file is served from disk.
+// builds (play/src/server/handlers/embed.tsx). Local builds work the same
+// way as prod now: mainsite renders a hidden iframe to /sw-bootstrap (which
+// proxies to the play worker for pk → JWT exchange + SW registration),
+// then mounts the visible iframe at /<entrypoint>. The dev-app serves the
+// entrypoint from disk and we inject the SDK bootstrap here.
 const EMBED_BOOTSTRAP_TAG = '<script src="/embed.js?v=local"></script>';
 
 /** Per-request access log (vite/caddy style). serve_local lines are always
@@ -292,6 +296,10 @@ function serveLocalFile(
     res.statusCode = 200;
     res.setHeader("Access-Control-Allow-Origin", "*");
     setIframeOriginHeaders(res);
+    // no-store keeps both the browser cache AND the play SW asset cache
+    // (which intercepts on the prod-testing flow) from serving stale copies
+    // of disk-edited files.
+    res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Type", contentType);
     res.setHeader("Content-Length", Buffer.byteLength(injected));
     res.end(injected);
@@ -301,6 +309,7 @@ function serveLocalFile(
   res.statusCode = 200;
   res.setHeader("Access-Control-Allow-Origin", "*");
   setIframeOriginHeaders(res);
+  res.setHeader("Cache-Control", "no-store");
   res.setHeader("Content-Type", contentType);
   if (contentEncoding) {
     res.setHeader("Content-Encoding", contentEncoding);
