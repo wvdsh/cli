@@ -17,12 +17,12 @@
  *      at the top of this module so every per-app path is pinned before any
  *      `app.whenReady` work runs.
  *   3. Start a local HTTPS server (`server.ts`) on a free port and apply
- *      `--host-rules=MAP <gameSubdomain>:443 127.0.0.1:<port>` so chromium
- *      routes the game iframe to us. No CDP `Fetch.enable`, so the bundled
- *      DevTools' Network tab works normally.
+ *      `--host-rules=MAP *.<localHostSuffix>:443 127.0.0.1:<port>` so chromium
+ *      routes every {gcid}-{userhash}.local.<playsite> iframe to us. No CDP
+ *      `Fetch.enable`, so the bundled DevTools' Network tab works normally.
  *   4. Open a single BrowserWindow, install a cert-verify proc that accepts
- *      our self-signed cert for the game subdomain, and navigate to the
- *      playtest URL.
+ *      our self-signed cert for any host under <localHostSuffix>, and
+ *      navigate to the playtest URL.
  *   5. Emit `{"type":"ready"}` on first did-finish-load.
  *   6. On window close → emit `{"type":"closed"}` and exit 0.
  *   7. Parent watchdog: poll `process.kill(parentPid, 0)` once a second and
@@ -54,7 +54,7 @@ import { startServer, type StartedServer } from "./server";
 
 interface RawConfig {
   uploadDir: string;
-  gameSubdomain: string;
+  localHostSuffix: string;
   playtestUrl: string;
   verbose?: boolean;
 }
@@ -134,7 +134,7 @@ function readConfig(): RawConfig {
   const parsed = JSON.parse(raw) as RawConfig;
   if (
     typeof parsed.uploadDir !== "string" ||
-    typeof parsed.gameSubdomain !== "string" ||
+    typeof parsed.localHostSuffix !== "string" ||
     typeof parsed.playtestUrl !== "string"
   ) {
     throw new Error("config missing required fields");
@@ -160,10 +160,13 @@ function watchParentProcess(): void {
   interval.unref();
 }
 
-function applyChromeSwitches(gameSubdomain: string, serverPort: number): void {
+function applyChromeSwitches(localHostSuffix: string, serverPort: number): void {
+  // Wildcard MAP covers every {gcid}-{userhash}.{suffix} the mainsite may
+  // navigate to in the same dev session (account switches, incognito with
+  // an anonymous id, etc.).
   app.commandLine.appendSwitch(
     "host-rules",
-    `MAP ${gameSubdomain}:443 127.0.0.1:${serverPort}`,
+    `MAP *.${localHostSuffix}:443 127.0.0.1:${serverPort}`,
   );
   // GPU: match chrome://flags/#{enable-unsafe-webgpu, enable-vulkan,
   // force-high-performance-gpu}. WebGPU games often need these for
@@ -174,17 +177,19 @@ function applyChromeSwitches(gameSubdomain: string, serverPort: number): void {
 }
 
 /**
- * Trust our self-signed cert for the game subdomain only. Every other
- * hostname falls through to chromium's default verification — so HTTPS
- * to wavedash.com / third-party CDNs is verified normally.
+ * Trust our self-signed cert for any host under the local suffix (every
+ * `{gcid}-{userhash}.{suffix}` the mainsite may navigate to). Every other
+ * hostname falls through to chromium's default verification — so HTTPS to
+ * wavedash.com / third-party CDNs is verified normally.
  *
- * Safe because `--host-rules` guarantees that `<gameSubdomain>:443` resolves
- * to our 127.0.0.1 server inside this chromium instance. There is no path
- * by which a remote origin could impersonate it.
+ * Safe because `--host-rules` guarantees those hosts resolve to our
+ * 127.0.0.1 server inside this chromium instance. There is no path by
+ * which a remote origin could impersonate them.
  */
-function trustLocalCertFor(s: Session, gameSubdomain: string): void {
+function trustLocalCertFor(s: Session, localHostSuffix: string): void {
+  const dotSuffix = `.${localHostSuffix}`;
   s.setCertificateVerifyProc((request, callback) => {
-    if (request.hostname === gameSubdomain) {
+    if (request.hostname.endsWith(dotSuffix)) {
       callback(0); // 0 = accept
       return;
     }
@@ -268,7 +273,7 @@ async function bootstrap(): Promise<void> {
   try {
     server = await startServer({
       uploadDir: config.uploadDir,
-      gameSubdomain: config.gameSubdomain,
+      localHostSuffix: config.localHostSuffix,
       verbose: !!config.verbose,
     });
   } catch (err) {
@@ -278,15 +283,15 @@ async function bootstrap(): Promise<void> {
   }
   if (config.verbose) {
     process.stderr.write(
-      `local server listening on https://127.0.0.1:${server.port} (proxy for ${config.gameSubdomain})\n`,
+      `local server listening on https://127.0.0.1:${server.port} (proxy for *.${config.localHostSuffix})\n`,
     );
   }
 
-  applyChromeSwitches(config.gameSubdomain, server.port);
+  applyChromeSwitches(config.localHostSuffix, server.port);
 
   await app.whenReady();
 
-  trustLocalCertFor(session.defaultSession, config.gameSubdomain);
+  trustLocalCertFor(session.defaultSession, config.localHostSuffix);
 
   // Packaged builds get their icon from build/icon.png via electron-builder,
   // which runs Apple's icon template at .icns generation time so the bundled

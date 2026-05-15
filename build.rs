@@ -5,15 +5,11 @@ fn main() {
     // Required config vars - must be set either by Doppler or .env
     let required = [
         "SITE_HOST",
-        // Host that serves game iframes (e.g. wavedashcdn.com). Mirrors the
-        // mainsite's PUBLIC_PLAYSITE_HOST — must match, since the iframe
-        // origin is `<gameId>.local.<PLAYSITE_HOST>` and `wavedash dev` maps
-        // that subdomain to the local server via chromium --host-rules.
+        // MUST match mainsite's PUBLIC_PLAYSITE_HOST — `wavedash dev` MAPs
+        // `*.local.<PLAYSITE_HOST>` via chromium --host-rules; drift = silent.
         "PLAYSITE_HOST",
         "CONVEX_HTTP_URL",
-        // Public host of the wavedash-dev-app R2 bucket (e.g. r2.dev URL or
-        // a custom domain). Baked in here so `wavedash dev` always knows
-        // where to fetch the matching Wavedash Dev build.
+        // R2 host for the wavedash-dev-app zip downloaded by `wavedash dev`.
         "CF_R2_WAVEDASH_DEV_APP_HOST",
     ];
 

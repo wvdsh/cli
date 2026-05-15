@@ -2,7 +2,8 @@
  * Generate a self-signed cert at startup.
  *
  * The cert is presented by the local HTTPS server and whitelisted via
- * `session.setCertificateVerifyProc` for the game subdomain only — so we
+ * `session.setCertificateVerifyProc` for any host under the local suffix
+ * (every `{gcid}-{userhash}.{suffix}` the mainsite may navigate to) — so we
  * don't need a real CA, and we don't weaken trust for any real origin.
  *
  * One key per process; rotates every dev-app launch.
@@ -16,9 +17,10 @@ export interface CertPair {
   keyPem: string;
 }
 
-export function generateCert(commonName: string): CertPair {
+export function generateCert(localHostSuffix: string): CertPair {
+  const wildcard = `*.${localHostSuffix}`;
   const pems = selfsigned.generate(
-    [{ name: 'commonName', value: commonName }],
+    [{ name: 'commonName', value: wildcard }],
     {
       keySize: 2048,
       days: 30,
@@ -34,7 +36,7 @@ export function generateCert(commonName: string): CertPair {
         {
           name: 'subjectAltName',
           altNames: [
-            { type: 2, value: commonName }, // DNS
+            { type: 2, value: wildcard }, // DNS — wildcard SAN
             { type: 7, ip: '127.0.0.1' }, // IPv4 — for direct localhost probes
             { type: 7, ip: '::1' }, // IPv6
           ],
