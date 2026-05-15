@@ -50,13 +50,8 @@ const PASSTHROUGH_PREFIXES = [
   "/local-embed",
 ];
 
-// Mirrors the bootstrap tag the play worker injects into prod CUSTOM-HTML
-// builds (play/src/server/handlers/embed.tsx). Local builds work the same
-// way as prod now: mainsite renders a hidden iframe to /sw-bootstrap (which
-// proxies to the play worker for pk → JWT exchange + SW registration),
-// then mounts the visible iframe at /<entrypoint>. The dev-app serves the
-// entrypoint from disk and we inject the SDK bootstrap here.
-const EMBED_BOOTSTRAP_TAG = '<script src="/embed.js?v=local"></script>';
+// Per-process nonce busts the play worker's immutable embed.js cache between `wavedash dev` runs while still letting in-session reloads hit the disk cache.
+const EMBED_BOOTSTRAP_TAG = `<script src="/embed.js?v=local-${Date.now()}"></script>`;
 
 /** Per-request access log (vite/caddy style). serve_local lines are always
  *  on; synth/passthrough are gated behind --verbose at the call sites. */
@@ -274,13 +269,11 @@ function serveLocalFile(
 
   const { contentType, contentEncoding } = resolveContentType(urlPath);
 
-  // CUSTOM-HTML iframe path: /local-embed redirects (302) to /<entrypoint>,
-  // and the browser fetches the file from us. Inject the SDK bootstrap into
-  // text/html responses so the developer's HTML behaves like a prod CUSTOM
-  // build (where play/src/server/handlers/embed.tsx injects on the way out
-  // of R2). Content-Encoding-coded responses (.html.gz) skip injection —
-  // we'd have to decompress to mutate, and HTML is rarely pre-compressed
-  // in dev builds.
+  // CUSTOM-HTML iframe path: dev-app serves the developer's HTML from disk
+  // and injects the SDK bootstrap, mirroring play/src/server/handlers/embed.tsx
+  // for prod builds. Content-Encoding-coded responses (.html.gz) skip
+  // injection — we'd have to decompress to mutate, and HTML is rarely
+  // pre-compressed in dev builds.
   const isHtml =
     !contentEncoding && contentType.startsWith("text/html");
   if (isHtml) {
