@@ -86,7 +86,7 @@ CLI → dev-app over **stdin** — one JSON line:
 ```json
 {
   "uploadDir": "/abs/path",
-  "gameSubdomain": "<gameId>.local.wavedashcdn.com",
+  "gameSubdomain": "<gameCloudId>-<userHash>.local.wavedashcdn.com",
   "playtestUrl": "https://wavedash.com/playtest/<slug>/<uuid>",
   "verbose": false
 }

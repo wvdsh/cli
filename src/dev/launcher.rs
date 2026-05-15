@@ -37,7 +37,7 @@ use super::dev_app::DevAppLaunch;
 #[serde(rename_all = "camelCase")]
 pub struct DevAppConfig {
     pub upload_dir: String,
-    pub game_subdomain: String,
+    pub local_host_suffix: String,
     pub playtest_url: String,
     pub verbose: bool,
 }

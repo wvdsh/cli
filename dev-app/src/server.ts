@@ -3,7 +3,7 @@
  *
  * Replaces the CDP `Fetch.enable` interceptor that previously hijacked the
  * game subdomain inside chromium itself. Chromium now reaches us through
- * `--host-rules=MAP <gameSubdomain>:443 127.0.0.1:<port>`, so the network
+ * `--host-rules=MAP *.<localHostSuffix>:443 127.0.0.1:<port>`, so the network
  * stack stays untouched and the bundled DevTools' Network tab works.
  *
  * Routing per request (matches the previous interceptor 1:1):
@@ -11,7 +11,7 @@
  *                                     CUSTOM-HTML with the SDK bootstrap
  *                                     injected).
  *   2. Path in PASSTHROUGH_PREFIXES → reverse-proxy to the real
- *                                     `https://<gameSubdomain>` (Node DNS,
+ *                                     `https://<incoming host>` (Node DNS,
  *                                     no host-rules → real network).
  *   3. Otherwise                    → serve a file from `uploadDir` with
  *                                     COEP/COOP/CORP and transparent
@@ -30,7 +30,7 @@ import { generateCert, type CertPair } from "./cert";
 
 export interface ServerConfig {
   uploadDir: string;
-  gameSubdomain: string;
+  localHostSuffix: string;
   verbose: boolean;
 }
 
@@ -71,7 +71,7 @@ function logServed(res: http.ServerResponse, url: string): void {
 export async function startServer(
   config: ServerConfig,
 ): Promise<StartedServer> {
-  const cert = generateCert(config.gameSubdomain);
+  const cert = generateCert(config.localHostSuffix);
 
   const server = https.createServer(
     { cert: cert.certPem, key: cert.keyPem },
@@ -110,9 +110,16 @@ async function handle(
   config: ServerConfig,
 ): Promise<void> {
   // SNI is honored by https.createServer, so req.headers.host carries the
-  // browser-facing host (the game subdomain). We use that to build the
-  // proxy URL for passthrough paths.
-  const hostHeader = req.headers.host ?? config.gameSubdomain;
+  // browser-facing host (the game subdomain). chromium's host-rules MAP
+  // always sets it; we reject anything missing rather than guessing.
+  const hostHeader = req.headers.host;
+  if (!hostHeader) {
+    res.statusCode = 400;
+    res.end("Missing Host header");
+    return;
+  }
+  // Strip the optional `:port` so the proxy origin and logs use the bare host.
+  const originHost = hostHeader.split(":")[0];
   const url = new URL(req.url ?? "/", `https://${hostHeader}`);
   const urlPath = url.pathname;
 
@@ -122,15 +129,15 @@ async function handle(
         log(
           "passthrough",
           req.method ?? "GET",
-          config.gameSubdomain + urlPath + url.search,
+          originHost + urlPath + url.search,
         );
       }
-      await proxyToOrigin(req, res, config.gameSubdomain);
+      await proxyToOrigin(req, res, originHost);
       return;
     }
 
     serveLocalFile(res, config.uploadDir, urlPath);
-    logServed(res, config.gameSubdomain + urlPath);
+    logServed(res, originHost + urlPath);
   } catch (err) {
     process.stderr.write(
       `handler error for ${req.url ?? ""}: ${String(err)}\n`,
@@ -152,15 +159,7 @@ function isPassthroughPath(p: string): boolean {
 
 
 /**
- * Headers every response on the game subdomain must carry. Mirrors the
- * production play worker (`play/src/server/index.ts`).
- *
- * - `Origin-Agent-Cluster: ?1` is sticky per origin per BrowsingContextGroup,
- *   so a single response without it locks the origin into site-keyed mode for
- *   the rest of the chromium session and breaks `crossOriginIsolated`.
- * - `Cross-Origin-Resource-Policy: cross-origin` is required because the
- *   mainsite (which sets COEP=require-corp) is on a different site than the
- *   playsite (wavedash.com vs wavedashcdn.com, and likewise in dev).
+ * Headers every response on the game subdomain must carry.
  */
 function setIframeOriginHeaders(res: http.ServerResponse): void {
   res.setHeader("Origin-Agent-Cluster", "?1");
