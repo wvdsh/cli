@@ -123,7 +123,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
                 .ok_or_else(|| anyhow::anyhow!("{} engine requires a version", engine_label))?;
             Some(fetch_entrypoint_params(engine_label, ver, html_path).await?)
         }
-        Some(EngineKind::JsDos | EngineKind::Ruffle) => {
+        Some(EngineKind::JsDos | EngineKind::Ruffle | EngineKind::RenPy) => {
             wavedash_config.executable_entrypoint_params()
         }
         None => None,

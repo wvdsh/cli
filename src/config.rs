@@ -147,15 +147,10 @@ pub struct UnitySection {
     pub version: String,
 }
 
+/// Shape for engines whose runtime is fetched as a single executable file
+/// (plus an optional loader script). Used by JSDOS, Ruffle, and Ren'Py.
 #[derive(Debug, Deserialize)]
-pub struct JsDosSection {
-    pub version: String,
-    pub executable: String,
-    pub loader_url: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct RuffleSection {
+pub struct ExecutableEngineSection {
     pub version: String,
     pub executable: String,
     pub loader_url: Option<String>,
@@ -174,10 +169,13 @@ pub struct WavedashConfig {
     pub unity: Option<UnitySection>,
 
     #[serde(rename = "jsdos")]
-    pub jsdos: Option<JsDosSection>,
+    pub jsdos: Option<ExecutableEngineSection>,
 
     #[serde(rename = "ruffle")]
-    pub ruffle: Option<RuffleSection>,
+    pub ruffle: Option<ExecutableEngineSection>,
+
+    #[serde(rename = "renpy")]
+    pub renpy: Option<ExecutableEngineSection>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +184,7 @@ pub enum EngineKind {
     Unity,
     JsDos,
     Ruffle,
+    RenPy,
 }
 
 impl EngineKind {
@@ -195,6 +194,7 @@ impl EngineKind {
             EngineKind::Unity => "UNITY",
             EngineKind::JsDos => "JSDOS",
             EngineKind::Ruffle => "RUFFLE",
+            EngineKind::RenPy => "RENPY",
         }
     }
 }
@@ -238,6 +238,7 @@ impl WavedashConfig {
             self.unity.is_some().then_some(EngineKind::Unity),
             self.jsdos.is_some().then_some(EngineKind::JsDos),
             self.ruffle.is_some().then_some(EngineKind::Ruffle),
+            self.renpy.is_some().then_some(EngineKind::RenPy),
         ]
         .into_iter()
         .flatten()
@@ -247,23 +248,29 @@ impl WavedashConfig {
             0 => Ok(None),
             1 => Ok(Some(engines[0])),
             _ => anyhow::bail!(
-                "Config must have at most one engine section: [godot], [unity], [jsdos], or [ruffle]"
+                "Config must have at most one engine section: [godot], [unity], [jsdos], [ruffle], or [renpy]"
             ),
         }
     }
 
+    /// Returns the section for the active executable-style engine, if any.
+    /// JSDOS, Ruffle, and Ren'Py all share the same shape; `engine_type()`
+    /// guarantees at most one of these is set at a time.
+    fn executable_section(&self) -> Option<&ExecutableEngineSection> {
+        self.jsdos
+            .as_ref()
+            .or(self.ruffle.as_ref())
+            .or(self.renpy.as_ref())
+    }
+
     pub fn engine_version(&self) -> Option<&str> {
-        if let Some(ref godot) = self.godot {
-            Some(&godot.version)
-        } else if let Some(ref unity) = self.unity {
-            Some(&unity.version)
-        } else if let Some(ref jsdos) = self.jsdos {
-            Some(&jsdos.version)
-        } else if let Some(ref ruffle) = self.ruffle {
-            Some(&ruffle.version)
-        } else {
-            None
+        if let Some(godot) = &self.godot {
+            return Some(&godot.version);
         }
+        if let Some(unity) = &self.unity {
+            return Some(&unity.version);
+        }
+        self.executable_section().map(|s| s.version.as_str())
     }
 
     /// Returns the entrypoint when no engine block is present.
@@ -279,38 +286,27 @@ impl WavedashConfig {
         }
     }
 
-    /// For JSDOS/Ruffle engines, returns the entrypointParams (executable + optional loader_url)
+    /// For executable-style engines (JSDOS/Ruffle/Ren'Py), returns the
+    /// entrypointParams (executable + optional loader_url).
     pub fn executable_entrypoint_params(&self) -> Option<serde_json::Value> {
-        if let Some(ref jsdos) = self.jsdos {
-            let mut params = serde_json::json!({ "executable": jsdos.executable });
-            if let Some(ref loader_url) = jsdos.loader_url {
+        self.executable_section().map(|s| {
+            let mut params = serde_json::json!({ "executable": s.executable });
+            if let Some(loader_url) = &s.loader_url {
                 params["loaderUrl"] = serde_json::json!(loader_url);
             }
-            Some(params)
-        } else if let Some(ref ruffle) = self.ruffle {
-            let mut params = serde_json::json!({ "executable": ruffle.executable });
-            if let Some(ref loader_url) = ruffle.loader_url {
-                params["loaderUrl"] = serde_json::json!(loader_url);
-            }
-            Some(params)
-        } else {
-            None
-        }
+            params
+        })
     }
 
-    /// For JSDOS/Ruffle engines, returns all files that must exist in upload_dir
+    /// For executable-style engines (JSDOS/Ruffle/Ren'Py), returns all files
+    /// that must exist in upload_dir.
     pub fn executable_files_to_validate(&self) -> Vec<&str> {
-        let mut files = Vec::new();
-        if let Some(ref jsdos) = self.jsdos {
-            files.push(jsdos.executable.as_str());
-            if let Some(ref loader_url) = jsdos.loader_url {
-                files.push(loader_url.as_str());
-            }
-        } else if let Some(ref ruffle) = self.ruffle {
-            files.push(ruffle.executable.as_str());
-            if let Some(ref loader_url) = ruffle.loader_url {
-                files.push(loader_url.as_str());
-            }
+        let Some(s) = self.executable_section() else {
+            return Vec::new();
+        };
+        let mut files = vec![s.executable.as_str()];
+        if let Some(loader_url) = &s.loader_url {
+            files.push(loader_url);
         }
         files
     }
