@@ -3,7 +3,7 @@
  *
  * Replaces the CDP `Fetch.enable` interceptor that previously hijacked the
  * game subdomain inside chromium itself. Chromium now reaches us through
- * `--host-rules=MAP <gameSubdomain>:443 127.0.0.1:<port>`, so the network
+ * `--host-rules=MAP *.<localHostSuffix>:443 127.0.0.1:<port>`, so the network
  * stack stays untouched and the bundled DevTools' Network tab works.
  *
  * Routing per request (matches the previous interceptor 1:1):
@@ -11,7 +11,7 @@
  *                                     CUSTOM-HTML with the SDK bootstrap
  *                                     injected).
  *   2. Path in PASSTHROUGH_PREFIXES → reverse-proxy to the real
- *                                     `https://<gameSubdomain>` (Node DNS,
+ *                                     `https://<incoming host>` (Node DNS,
  *                                     no host-rules → real network).
  *   3. Otherwise                    → serve a file from `uploadDir` with
  *                                     COEP/COOP/CORP and transparent
@@ -30,7 +30,7 @@ import { generateCert, type CertPair } from "./cert";
 
 export interface ServerConfig {
   uploadDir: string;
-  gameSubdomain: string;
+  localHostSuffix: string;
   verbose: boolean;
 }
 
@@ -43,23 +43,15 @@ export interface StartedServer {
 const PASSTHROUGH_PREFIXES = [
   "/embed.js",
   "/embed.css",
-  "/renpy-loader.js",
+  "/sw-embed.js",
   "/default-entrypoints/",
   "/auth/refresh",
+  "/sw-bootstrap",
   "/local-embed",
 ];
 
-// Mirrors the bootstrap tag the play worker injects into prod CUSTOM-HTML
-// builds (play/src/server/handlers/embed.tsx). Local builds get redirected
-// from /local-embed to /<entrypoint> after cookie planting; we inject the
-// SDK bootstrap here as the file is served from disk.
-const EMBED_BOOTSTRAP_TAG = '<script src="/embed.js?v=local"></script>';
-// Order is load-bearing: the loader shim installs setters on window.progress /
-// Module.print / window.presplashEnd that must wrap renpy-pre.js's assignments,
-// and depends on window.Wavedash existing from the SDK bootstrap.
-const RENPY_ENGINE = "RENPY";
-const RENPY_LOADER_TAG = '<script src="/renpy-loader.js?v=local"></script>';
-const EMBED_BOOTSTRAP_WITH_RENPY = EMBED_BOOTSTRAP_TAG + RENPY_LOADER_TAG;
+// Per-process nonce busts the play worker's immutable embed.js cache between `wavedash dev` runs while still letting in-session reloads hit the disk cache.
+const EMBED_BOOTSTRAP_TAG = `<script src="/embed.js?v=local-${Date.now()}"></script>`;
 
 /** Per-request access log (vite/caddy style). serve_local lines are always
  *  on; synth/passthrough are gated behind --verbose at the call sites. */
@@ -79,7 +71,7 @@ function logServed(res: http.ServerResponse, url: string): void {
 export async function startServer(
   config: ServerConfig,
 ): Promise<StartedServer> {
-  const cert = generateCert(config.gameSubdomain);
+  const cert = generateCert(config.localHostSuffix);
 
   const server = https.createServer(
     { cert: cert.certPem, key: cert.keyPem },
@@ -117,10 +109,20 @@ async function handle(
   res: http.ServerResponse,
   config: ServerConfig,
 ): Promise<void> {
-  // SNI is honored by https.createServer, so req.headers.host carries the
-  // browser-facing host (the game subdomain). We use that to build the
-  // proxy URL for passthrough paths.
-  const hostHeader = req.headers.host ?? config.gameSubdomain;
+  // Host header is the browser-facing `{gcid}-{userhash}.<localHostSuffix>`.
+  const hostHeader = req.headers.host;
+  if (!hostHeader) {
+    res.statusCode = 400;
+    res.end("Missing Host header");
+    return;
+  }
+  const originHost = hostHeader.split(":")[0];
+  // Defense-in-depth: pin the upstream `proxyToOrigin` sees to our suffix.
+  if (!originHost.endsWith(`.${config.localHostSuffix}`)) {
+    res.statusCode = 400;
+    res.end("Unexpected Host");
+    return;
+  }
   const url = new URL(req.url ?? "/", `https://${hostHeader}`);
   const urlPath = url.pathname;
 
@@ -130,15 +132,15 @@ async function handle(
         log(
           "passthrough",
           req.method ?? "GET",
-          config.gameSubdomain + urlPath + url.search,
+          originHost + urlPath + url.search,
         );
       }
-      await proxyToOrigin(req, res, config.gameSubdomain);
+      await proxyToOrigin(req, res, originHost);
       return;
     }
 
-    serveLocalFile(res, config.uploadDir, urlPath, url.searchParams);
-    logServed(res, config.gameSubdomain + urlPath);
+    serveLocalFile(res, config.uploadDir, urlPath);
+    logServed(res, originHost + urlPath);
   } catch (err) {
     process.stderr.write(
       `handler error for ${req.url ?? ""}: ${String(err)}\n`,
@@ -160,15 +162,8 @@ function isPassthroughPath(p: string): boolean {
 
 
 /**
- * Headers every response on the game subdomain must carry. Mirrors the
- * production play worker (`play/src/server/index.ts`).
- *
- * - `Origin-Agent-Cluster: ?1` is sticky per origin per BrowsingContextGroup,
- *   so a single response without it locks the origin into site-keyed mode for
- *   the rest of the chromium session and breaks `crossOriginIsolated`.
- * - `Cross-Origin-Resource-Policy: cross-origin` is required because the
- *   mainsite (which sets COEP=require-corp) is on a different site than the
- *   playsite (wavedash.com vs wavedashcdn.com, and likewise in dev).
+ * Mirrors the play worker: OAC=?1 (sticky per BrowsingContextGroup, lock-in
+ * if ever absent), CORP=cross-origin for the mainsite/playsite split.
  */
 function setIframeOriginHeaders(res: http.ServerResponse): void {
   res.setHeader("Origin-Agent-Cluster", "?1");
@@ -198,13 +193,12 @@ function readCustomHtml(uploadDir: string, entrypoint: string): string {
   return fs.readFileSync(filePath, "utf8");
 }
 
-function injectEmbedBootstrap(html: string, isRenpy: boolean): string {
-  const tag = isRenpy ? EMBED_BOOTSTRAP_WITH_RENPY : EMBED_BOOTSTRAP_TAG;
+function injectEmbedBootstrap(html: string): string {
   const idx = findHeadOpen(html);
   if (idx !== null) {
-    return html.slice(0, idx) + tag + html.slice(idx);
+    return html.slice(0, idx) + EMBED_BOOTSTRAP_TAG + html.slice(idx);
   }
-  return tag + html;
+  return EMBED_BOOTSTRAP_TAG + html;
 }
 
 /** Returns the index right after the first `<head ...>` open tag, or null. */
@@ -238,7 +232,6 @@ function serveLocalFile(
   res: http.ServerResponse,
   uploadDir: string,
   urlPath: string,
-  searchParams: URLSearchParams,
 ): void {
   let relative = urlPath.replace(/^\/+/, "");
   try {
@@ -279,13 +272,11 @@ function serveLocalFile(
 
   const { contentType, contentEncoding } = resolveContentType(urlPath);
 
-  // CUSTOM-HTML iframe path: /local-embed redirects (302) to /<entrypoint>,
-  // and the browser fetches the file from us. Inject the SDK bootstrap into
-  // text/html responses so the developer's HTML behaves like a prod CUSTOM
-  // build (where play/src/server/handlers/embed.tsx injects on the way out
-  // of R2). Content-Encoding-coded responses (.html.gz) skip injection —
-  // we'd have to decompress to mutate, and HTML is rarely pre-compressed
-  // in dev builds.
+  // CUSTOM-HTML iframe path: dev-app serves the developer's HTML from disk
+  // and injects the SDK bootstrap, mirroring play/src/server/handlers/embed.tsx
+  // for prod builds. Content-Encoding-coded responses (.html.gz) skip
+  // injection — we'd have to decompress to mutate, and HTML is rarely
+  // pre-compressed in dev builds.
   const isHtml =
     !contentEncoding && contentType.startsWith("text/html");
   if (isHtml) {
@@ -297,11 +288,14 @@ function serveLocalFile(
       sendNotFound(res);
       return;
     }
-    const isRenpy = searchParams.get("engine") === RENPY_ENGINE;
-    const injected = injectEmbedBootstrap(body, isRenpy);
+    const injected = injectEmbedBootstrap(body);
     res.statusCode = 200;
     res.setHeader("Access-Control-Allow-Origin", "*");
     setIframeOriginHeaders(res);
+    // no-store keeps both the browser cache AND the play SW asset cache
+    // (which intercepts on the prod-testing flow) from serving stale copies
+    // of disk-edited files.
+    res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Type", contentType);
     res.setHeader("Content-Length", Buffer.byteLength(injected));
     res.end(injected);
@@ -311,6 +305,7 @@ function serveLocalFile(
   res.statusCode = 200;
   res.setHeader("Access-Control-Allow-Origin", "*");
   setIframeOriginHeaders(res);
+  res.setHeader("Cache-Control", "no-store");
   res.setHeader("Content-Type", contentType);
   if (contentEncoding) {
     res.setHeader("Content-Encoding", contentEncoding);
