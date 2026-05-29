@@ -8,8 +8,8 @@ use std::path::PathBuf;
 /// - Staging: ~/.wavedash-stg
 /// - Dev: ~/.wavedash-dev
 pub fn wavedash_dir() -> Result<PathBuf> {
-    let base_dirs = BaseDirs::new()
-        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+    let base_dirs =
+        BaseDirs::new().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
     Ok(base_dirs.home_dir().join(env!("CONFIG_DIR")))
 }
 
@@ -94,7 +94,9 @@ pub fn create_http_client() -> Result<reqwest::Client> {
         }
     }
 
-    Ok(reqwest::Client::builder().default_headers(headers).build()?)
+    Ok(reqwest::Client::builder()
+        .default_headers(headers)
+        .build()?)
 }
 
 /// Check an API response for errors and return a human-friendly message.
@@ -147,6 +149,11 @@ pub struct UnitySection {
     pub version: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DefoldSection {
+    pub version: String,
+}
+
 /// Shape for engines whose runtime is fetched as a single executable file
 /// (plus an optional loader script). Used by JSDOS, Ruffle, and Ren'Py.
 #[derive(Debug, Deserialize)]
@@ -168,6 +175,9 @@ pub struct WavedashConfig {
     #[serde(rename = "unity")]
     pub unity: Option<UnitySection>,
 
+    #[serde(rename = "defold")]
+    pub defold: Option<DefoldSection>,
+
     #[serde(rename = "jsdos")]
     pub jsdos: Option<ExecutableEngineSection>,
 
@@ -182,6 +192,7 @@ pub struct WavedashConfig {
 pub enum EngineKind {
     Godot,
     Unity,
+    Defold,
     JsDos,
     Ruffle,
     RenPy,
@@ -192,6 +203,7 @@ impl EngineKind {
         match self {
             EngineKind::Godot => "GODOT",
             EngineKind::Unity => "UNITY",
+            EngineKind::Defold => "DEFOLD",
             EngineKind::JsDos => "JSDOS",
             EngineKind::Ruffle => "RUFFLE",
             EngineKind::RenPy => "RENPY",
@@ -236,6 +248,7 @@ impl WavedashConfig {
         let engines: Vec<EngineKind> = [
             self.godot.is_some().then_some(EngineKind::Godot),
             self.unity.is_some().then_some(EngineKind::Unity),
+            self.defold.is_some().then_some(EngineKind::Defold),
             self.jsdos.is_some().then_some(EngineKind::JsDos),
             self.ruffle.is_some().then_some(EngineKind::Ruffle),
             self.renpy.is_some().then_some(EngineKind::RenPy),
@@ -248,7 +261,7 @@ impl WavedashConfig {
             0 => Ok(None),
             1 => Ok(Some(engines[0])),
             _ => anyhow::bail!(
-                "Config must have at most one engine section: [godot], [unity], [jsdos], [ruffle], or [renpy]"
+                "Config must have at most one engine section: [godot], [unity], [defold], [jsdos], [ruffle], or [renpy]"
             ),
         }
     }
@@ -270,6 +283,9 @@ impl WavedashConfig {
         if let Some(unity) = &self.unity {
             return Some(&unity.version);
         }
+        if let Some(defold) = &self.defold {
+            return Some(&defold.version);
+        }
         self.executable_section().map(|s| s.version.as_str())
     }
 
@@ -277,11 +293,7 @@ impl WavedashConfig {
     /// Uses the user-specified value from the config, or defaults to "index.html".
     pub fn entrypoint(&self) -> Option<&str> {
         match self.engine_type() {
-            Ok(None) => Some(
-                self.entrypoint
-                    .as_deref()
-                    .unwrap_or("index.html"),
-            ),
+            Ok(None) => Some(self.entrypoint.as_deref().unwrap_or("index.html")),
             _ => None,
         }
     }

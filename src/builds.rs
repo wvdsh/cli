@@ -1,5 +1,6 @@
 use crate::auth::AuthManager;
-use crate::config::{self, WavedashConfig};
+use crate::config::{self, EngineKind, WavedashConfig};
+use crate::dev::entrypoint::{fetch_entrypoint_params, locate_html_entrypoint};
 use crate::file_staging::FileStaging;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -124,7 +125,11 @@ async fn notify_upload_complete(
     Ok(result)
 }
 
-pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Option<String>) -> Result<()> {
+pub async fn handle_build_push(
+    config_path: PathBuf,
+    verbose: bool,
+    message: Option<String>,
+) -> Result<()> {
     // Load wavedash.toml config
     let wavedash_config = WavedashConfig::load(&config_path)?;
 
@@ -157,14 +162,39 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
         anyhow::bail!("No files found in {}", upload_dir.display());
     }
 
-    // Get temporary R2 credentials (includes build size)
     let engine_kind = wavedash_config.engine_type()?;
+    let engine_version = wavedash_config.engine_version();
+    let entrypoint_params = match engine_kind {
+        Some(EngineKind::Defold) => {
+            let html_entrypoint = locate_html_entrypoint(&upload_dir);
+            let html_path = html_entrypoint.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("No HTML file found in upload_dir; required for DEFOLD builds")
+            })?;
+            let ver = engine_version
+                .ok_or_else(|| anyhow::anyhow!("DEFOLD engine requires a version"))?;
+            let html_relative_path = html_path
+                .strip_prefix(&upload_dir)
+                .unwrap_or(html_path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            Some(
+                fetch_entrypoint_params("DEFOLD", ver, html_path, Some(&html_relative_path))
+                    .await?,
+            )
+        }
+        Some(EngineKind::JsDos | EngineKind::Ruffle | EngineKind::RenPy) => {
+            wavedash_config.executable_entrypoint_params()
+        }
+        _ => None,
+    };
+
+    // Get temporary R2 credentials (includes build size)
     let creds = get_temp_credentials(
         &wavedash_config.game_id,
         engine_kind.map(|e| e.as_label()),
-        wavedash_config.engine_version(),
+        engine_version,
         wavedash_config.entrypoint(),
-        wavedash_config.executable_entrypoint_params(),
+        entrypoint_params,
         message.as_deref(),
         total_bytes,
         &api_key,
@@ -191,10 +221,7 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
 
     // Print the play URL
     let site_host = config::get("open_browser_website_host")?;
-    let play_url = format!(
-        "{}/playtest/{}/{}",
-        site_host, result.game_slug, creds.uuid
-    );
+    let play_url = format!("{}/playtest/{}/{}", site_host, result.game_slug, creds.uuid);
     println!("\n▶ Play at: {}", play_url);
 
     Ok(())

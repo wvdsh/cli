@@ -9,7 +9,7 @@ use crate::config::{self, EngineKind, WavedashConfig};
 use crate::file_staging::FileStaging;
 
 mod dev_app;
-mod entrypoint;
+pub(crate) mod entrypoint;
 mod launcher;
 
 use dev_app::{ensure_dev_app, user_data_dir};
@@ -99,7 +99,10 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
     // pinned to the dev-app source dir, so a relative `./dist` would resolve
     // there (and serve the dev-app's own bundled `main.js`).
     let upload_dir = upload_dir.canonicalize().with_context(|| {
-        format!("Failed to canonicalize upload_dir: {}", upload_dir.display())
+        format!(
+            "Failed to canonicalize upload_dir: {}",
+            upload_dir.display()
+        )
     })?;
 
     let engine_kind = wavedash_config.engine_type()?;
@@ -111,7 +114,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
     let html_entrypoint = locate_html_entrypoint(&upload_dir);
     let engine_version = wavedash_config.engine_version();
     let entrypoint_params = match engine_kind {
-        Some(EngineKind::Godot | EngineKind::Unity) => {
+        Some(EngineKind::Godot | EngineKind::Unity | EngineKind::Defold) => {
             let engine_label = engine_kind.unwrap().as_label();
             let html_path = html_entrypoint.as_deref().ok_or_else(|| {
                 anyhow::anyhow!(
@@ -121,7 +124,15 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
             })?;
             let ver = engine_version
                 .ok_or_else(|| anyhow::anyhow!("{} engine requires a version", engine_label))?;
-            Some(fetch_entrypoint_params(engine_label, ver, html_path).await?)
+            let html_relative_path = html_path
+                .strip_prefix(&upload_dir)
+                .unwrap_or(html_path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            Some(
+                fetch_entrypoint_params(engine_label, ver, html_path, Some(&html_relative_path))
+                    .await?,
+            )
         }
         Some(EngineKind::JsDos | EngineKind::Ruffle | EngineKind::RenPy) => {
             wavedash_config.executable_entrypoint_params()

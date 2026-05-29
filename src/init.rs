@@ -39,6 +39,7 @@ struct GamesResponse {
 enum EngineType {
     Godot,
     Unity,
+    Defold,
     Custom,
 }
 
@@ -47,6 +48,7 @@ impl EngineType {
         match self {
             EngineType::Godot => "build",
             EngineType::Unity => "build",
+            EngineType::Defold => "dist",
             EngineType::Custom => "dist",
         }
     }
@@ -130,8 +132,23 @@ fn detect_unity(dir: &Path) -> Option<DetectedEngine> {
     None
 }
 
+/// Look for a Defold project marker.
+fn detect_defold(dir: &Path) -> Option<DetectedEngine> {
+    if dir.join("game.project").is_file() {
+        return Some(DetectedEngine {
+            engine_type: EngineType::Defold,
+            version_hint: None,
+        });
+    }
+
+    None
+}
+
 fn detect_engine(dir: &Path) -> DetectedEngine {
     if let Some(engine) = detect_godot(dir) {
+        return engine;
+    }
+    if let Some(engine) = detect_defold(dir) {
         return engine;
     }
     if let Some(engine) = detect_unity(dir) {
@@ -233,6 +250,10 @@ fn generate_toml(
             let version = engine_version.unwrap_or("2022.3");
             toml.push_str(&format!("\n[unity]\nversion = \"{}\"\n", version));
         }
+        EngineType::Defold => {
+            let version = engine_version.unwrap_or("1.0");
+            toml.push_str(&format!("\n[defold]\nversion = \"{}\"\n", version));
+        }
         EngineType::Custom => {
             toml.push_str("\nentrypoint = \"index.html\"\n");
         }
@@ -253,9 +274,7 @@ pub async fn handle_init() -> Result<()> {
     let auth_info = auth_manager.get_auth_info();
     let api_key = match auth_info.source {
         AuthSource::None => {
-            cliclack::outro_cancel(
-                "Not authenticated. Run `wavedash auth login` first.",
-            )?;
+            cliclack::outro_cancel("Not authenticated. Run `wavedash auth login` first.")?;
             std::process::exit(1);
         }
         _ => auth_info.api_key.unwrap(),
@@ -264,10 +283,9 @@ pub async fn handle_init() -> Result<()> {
     // 2. Check for existing wavedash.toml
     let config_path = PathBuf::from("wavedash.toml");
     if config_path.exists() {
-        let overwrite: bool = cliclack::confirm(
-            "A wavedash.toml already exists. Do you want to reinitialize?",
-        )
-        .interact()?;
+        let overwrite: bool =
+            cliclack::confirm("A wavedash.toml already exists. Do you want to reinitialize?")
+                .interact()?;
 
         if !overwrite {
             cliclack::outro("Keeping existing configuration.")?;
@@ -279,7 +297,7 @@ pub async fn handle_init() -> Result<()> {
     let current_dir = std::env::current_dir()?;
     let detected = detect_engine(&current_dir);
 
-    // Only prompt for version when we detect Godot/Unity.
+    // Only prompt for version when we detect a first-class engine.
     // For web builds (threejs, phaser, custom, etc.) no engine config is needed.
     let engine_version: Option<String> = match &detected.engine_type {
         EngineType::Godot => {
@@ -301,6 +319,13 @@ pub async fn handle_init() -> Result<()> {
                     .interact()?;
                 Some(version)
             }
+        }
+        EngineType::Defold => {
+            let version: String = cliclack::input("Defold version")
+                .placeholder("1.0")
+                .default_input("1.0")
+                .interact()?;
+            Some(version)
         }
         EngineType::Custom => None,
     };
@@ -524,11 +549,7 @@ pub async fn handle_project_list(team_id: &str, json: bool) -> Result<()> {
         .load_preset(UTF8_FULL)
         .apply_modifier(UTF8_ROUND_CORNERS)
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec![
-            Cell::new("ID"),
-            Cell::new("Slug"),
-            Cell::new("Title"),
-        ]);
+        .set_header(vec![Cell::new("ID"), Cell::new("Slug"), Cell::new("Title")]);
     for game in games {
         table.add_row(vec![game._id, game.slug, game.title]);
     }

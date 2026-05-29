@@ -20,6 +20,7 @@ pub fn locate_html_entrypoint(upload_dir: &Path) -> Option<PathBuf> {
         return Some(default_index);
     }
 
+    let mut html_files: Vec<PathBuf> = Vec::new();
     for entry in WalkDir::new(upload_dir)
         .min_depth(1)
         .into_iter()
@@ -28,23 +29,54 @@ pub fn locate_html_entrypoint(upload_dir: &Path) -> Option<PathBuf> {
         if entry.file_type().is_file() {
             if let Some(ext) = entry.path().extension() {
                 if ext.eq_ignore_ascii_case("html") {
-                    return Some(entry.into_path());
+                    html_files.push(entry.into_path());
                 }
             }
         }
     }
 
-    None
+    html_files.sort_by(|a, b| {
+        let modified_a = a.metadata().and_then(|m| m.modified()).ok();
+        let modified_b = b.metadata().and_then(|m| m.modified()).ok();
+        let relative_a = a
+            .strip_prefix(upload_dir)
+            .unwrap_or(a)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let relative_b = b
+            .strip_prefix(upload_dir)
+            .unwrap_or(b)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let architecture_score = |relative: &str| {
+            if relative.starts_with("wasm-web/") {
+                0
+            } else if relative.starts_with("js-web/") {
+                1
+            } else {
+                2
+            }
+        };
+
+        modified_b
+            .cmp(&modified_a)
+            .then_with(|| architecture_score(&relative_a).cmp(&architecture_score(&relative_b)))
+            .then_with(|| relative_a.cmp(&relative_b))
+    });
+
+    html_files.into_iter().next()
 }
 
-pub async fn fetch_entrypoint_params(engine: &str, engine_version: &str, html_path: &Path) -> Result<Value> {
+pub async fn fetch_entrypoint_params(
+    engine: &str,
+    engine_version: &str,
+    html_path: &Path,
+    html_relative_path: Option<&str>,
+) -> Result<Value> {
     let html_content = fs::read_to_string(html_path)
         .with_context(|| format!("Failed to read {}", html_path.display()))?;
     let api_host = config::get("api_host")?;
-    let endpoint = format!(
-        "{}/cli/entrypoint-params",
-        api_host.trim_end_matches('/')
-    );
+    let endpoint = format!("{}/cli/entrypoint-params", api_host.trim_end_matches('/'));
 
     let client = config::create_http_client()?;
     let response = client
@@ -53,6 +85,7 @@ pub async fn fetch_entrypoint_params(engine: &str, engine_version: &str, html_pa
             "engine": engine,
             "engineVersion": engine_version,
             "htmlContent": html_content,
+            "htmlPath": html_relative_path,
         }))
         .send()
         .await
