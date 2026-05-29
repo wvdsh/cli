@@ -14,6 +14,9 @@ struct EntrypointParamsResponse {
     entrypoint_params: Value,
 }
 
+// Shared by the Godot/Unity/Defold dev and build flows. A root-level `index.html`
+// short-circuits, so single-HTML exports (Godot/Unity) keep their old behavior; the
+// mtime/architecture ranking below only matters for nested multi-HTML dists (Defold).
 pub fn locate_html_entrypoint(upload_dir: &Path) -> Option<PathBuf> {
     let default_index = upload_dir.join("index.html");
     if default_index.is_file() {

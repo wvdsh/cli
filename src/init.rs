@@ -251,7 +251,7 @@ fn generate_toml(
             toml.push_str(&format!("\n[unity]\nversion = \"{}\"\n", version));
         }
         EngineType::Defold => {
-            let version = engine_version.unwrap_or("1.0");
+            let version = engine_version.unwrap_or("1.12.4");
             toml.push_str(&format!("\n[defold]\nversion = \"{}\"\n", version));
         }
         EngineType::Custom => {
@@ -322,8 +322,8 @@ pub async fn handle_init() -> Result<()> {
         }
         EngineType::Defold => {
             let version: String = cliclack::input("Defold version")
-                .placeholder("1.0")
-                .default_input("1.0")
+                .placeholder("1.12.4")
+                .default_input("1.12.4")
                 .interact()?;
             Some(version)
         }
