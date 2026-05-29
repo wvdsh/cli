@@ -274,7 +274,9 @@ pub async fn handle_init() -> Result<()> {
     let auth_info = auth_manager.get_auth_info();
     let api_key = match auth_info.source {
         AuthSource::None => {
-            cliclack::outro_cancel("Not authenticated. Run `wavedash auth login` first.")?;
+            cliclack::outro_cancel(
+                "Not authenticated. Run `wavedash auth login` first.",
+            )?;
             std::process::exit(1);
         }
         _ => auth_info.api_key.unwrap(),
@@ -283,9 +285,10 @@ pub async fn handle_init() -> Result<()> {
     // 2. Check for existing wavedash.toml
     let config_path = PathBuf::from("wavedash.toml");
     if config_path.exists() {
-        let overwrite: bool =
-            cliclack::confirm("A wavedash.toml already exists. Do you want to reinitialize?")
-                .interact()?;
+        let overwrite: bool = cliclack::confirm(
+            "A wavedash.toml already exists. Do you want to reinitialize?",
+        )
+        .interact()?;
 
         if !overwrite {
             cliclack::outro("Keeping existing configuration.")?;
@@ -549,7 +552,11 @@ pub async fn handle_project_list(team_id: &str, json: bool) -> Result<()> {
         .load_preset(UTF8_FULL)
         .apply_modifier(UTF8_ROUND_CORNERS)
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec![Cell::new("ID"), Cell::new("Slug"), Cell::new("Title")]);
+        .set_header(vec![
+            Cell::new("ID"),
+            Cell::new("Slug"),
+            Cell::new("Title"),
+        ]);
     for game in games {
         table.add_row(vec![game._id, game.slug, game.title]);
     }

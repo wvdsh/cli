@@ -8,8 +8,8 @@ use std::path::PathBuf;
 /// - Staging: ~/.wavedash-stg
 /// - Dev: ~/.wavedash-dev
 pub fn wavedash_dir() -> Result<PathBuf> {
-    let base_dirs =
-        BaseDirs::new().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+    let base_dirs = BaseDirs::new()
+        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
     Ok(base_dirs.home_dir().join(env!("CONFIG_DIR")))
 }
 
@@ -94,9 +94,7 @@ pub fn create_http_client() -> Result<reqwest::Client> {
         }
     }
 
-    Ok(reqwest::Client::builder()
-        .default_headers(headers)
-        .build()?)
+    Ok(reqwest::Client::builder().default_headers(headers).build()?)
 }
 
 /// Check an API response for errors and return a human-friendly message.
@@ -293,7 +291,11 @@ impl WavedashConfig {
     /// Uses the user-specified value from the config, or defaults to "index.html".
     pub fn entrypoint(&self) -> Option<&str> {
         match self.engine_type() {
-            Ok(None) => Some(self.entrypoint.as_deref().unwrap_or("index.html")),
+            Ok(None) => Some(
+                self.entrypoint
+                    .as_deref()
+                    .unwrap_or("index.html"),
+            ),
             _ => None,
         }
     }

@@ -79,7 +79,10 @@ pub async fn fetch_entrypoint_params(
     let html_content = fs::read_to_string(html_path)
         .with_context(|| format!("Failed to read {}", html_path.display()))?;
     let api_host = config::get("api_host")?;
-    let endpoint = format!("{}/cli/entrypoint-params", api_host.trim_end_matches('/'));
+    let endpoint = format!(
+        "{}/cli/entrypoint-params",
+        api_host.trim_end_matches('/')
+    );
 
     let client = config::create_http_client()?;
     let response = client

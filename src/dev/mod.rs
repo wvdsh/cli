@@ -99,10 +99,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
     // pinned to the dev-app source dir, so a relative `./dist` would resolve
     // there (and serve the dev-app's own bundled `main.js`).
     let upload_dir = upload_dir.canonicalize().with_context(|| {
-        format!(
-            "Failed to canonicalize upload_dir: {}",
-            upload_dir.display()
-        )
+        format!("Failed to canonicalize upload_dir: {}", upload_dir.display())
     })?;
 
     let engine_kind = wavedash_config.engine_type()?;
