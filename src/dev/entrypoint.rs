@@ -14,9 +14,8 @@ struct EntrypointParamsResponse {
     entrypoint_params: Value,
 }
 
-// Shared by the Godot/Unity/Defold dev and build flows. A root-level `index.html`
-// short-circuits, so single-HTML exports (Godot/Unity) keep their old behavior; the
-// mtime/architecture ranking below only matters for nested multi-HTML dists (Defold).
+// A root `index.html` short-circuits; the ranking below only matters for nested
+// multi-HTML Defold dists.
 pub fn locate_html_entrypoint(upload_dir: &Path) -> Option<PathBuf> {
     let default_index = upload_dir.join("index.html");
     if default_index.is_file() {
@@ -38,10 +37,9 @@ pub fn locate_html_entrypoint(upload_dir: &Path) -> Option<PathBuf> {
         }
     }
 
+    // Newest export wins; wasm-web beats js-web only on ties, then path. Unreadable
+    // mtime falls back to UNIX_EPOCH (oldest) so it can't sort as "newest".
     html_files.sort_by(|a, b| {
-        // A file whose mtime can't be read is treated as oldest (UNIX_EPOCH) so it
-        // never wins selection by accident — Option<SystemTime> would otherwise order
-        // None before Some and make it sort as "newest" under the descending cmp.
         let modified_a = a
             .metadata()
             .and_then(|m| m.modified())
@@ -60,18 +58,18 @@ pub fn locate_html_entrypoint(upload_dir: &Path) -> Option<PathBuf> {
             .unwrap_or(b)
             .to_string_lossy()
             .replace('\\', "/");
+        // Match the arch folder as any path segment (Defold nests it under a game dir).
         let architecture_score = |relative: &str| {
-            if relative.starts_with("wasm-web/") {
+            let mut segments = relative.split('/');
+            if segments.clone().any(|s| s == "wasm-web") {
                 0
-            } else if relative.starts_with("js-web/") {
+            } else if segments.any(|s| s == "js-web") {
                 1
             } else {
                 2
             }
         };
 
-        // Newest export wins (re-exporting selects the build you just made);
-        // wasm-web > js-web only breaks genuine ties, then path for determinism.
         modified_b
             .cmp(&modified_a)
             .then_with(|| architecture_score(&relative_a).cmp(&architecture_score(&relative_b)))

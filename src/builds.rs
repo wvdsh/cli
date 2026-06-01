@@ -2,7 +2,7 @@ use crate::auth::AuthManager;
 use crate::config::{self, EngineKind, WavedashConfig};
 use crate::dev::entrypoint::{fetch_entrypoint_params, locate_html_entrypoint};
 use crate::file_staging::FileStaging;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 #[path = "uploader.rs"]
@@ -149,6 +149,12 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
         anyhow::bail!("Source must be a directory: {}", upload_dir.display());
     }
 
+    // Canonicalize so a strip_prefix miss can't leak an absolute path as htmlPath
+    // (mirrors `wavedash dev`).
+    let upload_dir = upload_dir
+        .canonicalize()
+        .with_context(|| format!("Failed to canonicalize upload_dir: {}", upload_dir.display()))?;
+
     // Validate required files exist in upload directory
     FileStaging::prepare(&upload_dir, &wavedash_config)?;
 
@@ -174,14 +180,22 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
                 .to_string_lossy()
                 .replace('\\', "/");
             Some(
-                fetch_entrypoint_params("DEFOLD", ver, html_path, Some(&html_relative_path))
-                    .await?,
+                fetch_entrypoint_params(
+                    EngineKind::Defold.as_label(),
+                    ver,
+                    html_path,
+                    Some(&html_relative_path),
+                )
+                .await?,
             )
         }
         Some(EngineKind::JsDos | EngineKind::Ruffle | EngineKind::RenPy) => {
             wavedash_config.executable_entrypoint_params()
         }
-        _ => None,
+        // Explicit (not `_`) so a new EngineKind forces a decision. Godot/Unity
+        // params are computed server-side.
+        Some(EngineKind::Godot | EngineKind::Unity) => None,
+        None => None,
     };
 
     // Get temporary R2 credentials (includes build size)
