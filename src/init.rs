@@ -48,6 +48,7 @@ impl EngineType {
         match self {
             EngineType::Godot => "build",
             EngineType::Unity => "build",
+            // Defold reserves top-level build/ for its build cache, so default elsewhere.
             EngineType::Defold => "dist",
             EngineType::Custom => "dist",
         }
