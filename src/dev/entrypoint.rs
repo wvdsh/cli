@@ -39,8 +39,17 @@ pub fn locate_html_entrypoint(upload_dir: &Path) -> Option<PathBuf> {
     }
 
     html_files.sort_by(|a, b| {
-        let modified_a = a.metadata().and_then(|m| m.modified()).ok();
-        let modified_b = b.metadata().and_then(|m| m.modified()).ok();
+        // A file whose mtime can't be read is treated as oldest (UNIX_EPOCH) so it
+        // never wins selection by accident — Option<SystemTime> would otherwise order
+        // None before Some and make it sort as "newest" under the descending cmp.
+        let modified_a = a
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        let modified_b = b
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
         let relative_a = a
             .strip_prefix(upload_dir)
             .unwrap_or(a)
@@ -61,6 +70,8 @@ pub fn locate_html_entrypoint(upload_dir: &Path) -> Option<PathBuf> {
             }
         };
 
+        // Newest export wins (re-exporting selects the build you just made);
+        // wasm-web > js-web only breaks genuine ties, then path for determinism.
         modified_b
             .cmp(&modified_a)
             .then_with(|| architecture_score(&relative_a).cmp(&architecture_score(&relative_b)))
