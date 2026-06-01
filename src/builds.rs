@@ -2,7 +2,7 @@ use crate::auth::AuthManager;
 use crate::config::{self, EngineKind, WavedashConfig};
 use crate::dev::entrypoint::{fetch_entrypoint_params, locate_html_entrypoint};
 use crate::file_staging::FileStaging;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 #[path = "uploader.rs"]
@@ -148,12 +148,6 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
     if !upload_dir.is_dir() {
         anyhow::bail!("Source must be a directory: {}", upload_dir.display());
     }
-
-    // Canonicalize so a strip_prefix miss can't leak an absolute path as htmlPath
-    // (mirrors `wavedash dev`).
-    let upload_dir = upload_dir
-        .canonicalize()
-        .with_context(|| format!("Failed to canonicalize upload_dir: {}", upload_dir.display()))?;
 
     // Validate required files exist in upload directory
     FileStaging::prepare(&upload_dir, &wavedash_config)?;
