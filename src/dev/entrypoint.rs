@@ -55,8 +55,8 @@ pub fn resolve_defold_entrypoint(
             "Defold builds need an `entrypoint` in wavedash.toml pointing to your HTML5 export, e.g.\n  entrypoint = \"wasm-web/<game>/index.html\"\n(a Defold bundle can contain both wasm-web/ and js-web/ — pick one)"
         )
     })?;
-    let relative_path = entrypoint.replace('\\', "/");
-    let entrypoint_path = Path::new(&relative_path);
+    let entrypoint_input = entrypoint.replace('\\', "/");
+    let entrypoint_path = Path::new(&entrypoint_input);
     if entrypoint_path.is_absolute()
         || entrypoint_path.components().any(|component| {
             matches!(
@@ -71,6 +71,15 @@ pub fn resolve_defold_entrypoint(
             upload_dir.display()
         );
     }
+    let relative_path = entrypoint_path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(segment) => Some(segment.to_string_lossy().into_owned()),
+            Component::CurDir => None,
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/");
 
     let lower = relative_path.to_ascii_lowercase();
     if !lower.ends_with(".html") && !lower.ends_with(".htm") {
@@ -189,6 +198,23 @@ mod tests {
 
         let (resolved, relative) =
             resolve_defold_entrypoint(&upload_dir, Some("wasm-web\\example\\index.html"))
+                .expect("resolve entrypoint");
+
+        assert_eq!(resolved, html_path);
+        assert_eq!(relative, "wasm-web/example/index.html");
+
+        fs::remove_dir_all(upload_dir).expect("cleanup");
+    }
+
+    #[test]
+    fn normalizes_defold_entrypoint_dot_segments() {
+        let upload_dir = temp_upload_dir("dot-segments");
+        let html_path = upload_dir.join("wasm-web/example/index.html");
+        fs::create_dir_all(html_path.parent().expect("html parent")).expect("create dirs");
+        fs::write(&html_path, "<html></html>").expect("write html");
+
+        let (resolved, relative) =
+            resolve_defold_entrypoint(&upload_dir, Some("./wasm-web/./example/index.html"))
                 .expect("resolve entrypoint");
 
         assert_eq!(resolved, html_path);
