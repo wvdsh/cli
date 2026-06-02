@@ -149,6 +149,15 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
         anyhow::bail!("Source must be a directory: {}", upload_dir.display());
     }
 
+    let engine_kind = wavedash_config.engine_type()?;
+    let defold_entrypoint = match engine_kind {
+        Some(EngineKind::Defold) => Some(resolve_defold_entrypoint(
+            &upload_dir,
+            wavedash_config.entrypoint.as_deref(),
+        )?),
+        _ => None,
+    };
+
     // Validate required files exist in upload directory
     FileStaging::prepare(&upload_dir, &wavedash_config)?;
 
@@ -158,24 +167,26 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
         anyhow::bail!("No files found in {}", upload_dir.display());
     }
 
-    let engine_kind = wavedash_config.engine_type()?;
-    let entrypoint = match engine_kind {
-        Some(EngineKind::Defold) => wavedash_config.entrypoint.as_deref(),
+    let entrypoint = match (&engine_kind, &defold_entrypoint) {
+        (Some(EngineKind::Defold), Some((_, html_relative_path))) => {
+            Some(html_relative_path.as_str())
+        }
         _ => wavedash_config.entrypoint(),
     };
     let engine_version = wavedash_config.engine_version();
     let entrypoint_params = match engine_kind {
         Some(EngineKind::Defold) => {
-            let (html_path, html_relative_path) =
-                resolve_defold_entrypoint(&upload_dir, wavedash_config.entrypoint.as_deref())?;
+            let (html_path, html_relative_path) = defold_entrypoint
+                .as_ref()
+                .expect("defold entrypoint resolved");
             let ver = engine_version
                 .ok_or_else(|| anyhow::anyhow!("DEFOLD engine requires a version"))?;
             Some(
                 fetch_entrypoint_params(
                     EngineKind::Defold.as_label(),
                     ver,
-                    &html_path,
-                    Some(&html_relative_path),
+                    html_path,
+                    Some(html_relative_path.as_str()),
                 )
                 .await?,
             )

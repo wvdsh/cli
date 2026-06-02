@@ -181,6 +181,23 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_defold_entrypoint_backslashes() {
+        let upload_dir = temp_upload_dir("backslashes");
+        let html_path = upload_dir.join("wasm-web/example/index.html");
+        fs::create_dir_all(html_path.parent().expect("html parent")).expect("create dirs");
+        fs::write(&html_path, "<html></html>").expect("write html");
+
+        let (resolved, relative) =
+            resolve_defold_entrypoint(&upload_dir, Some("wasm-web\\example\\index.html"))
+                .expect("resolve entrypoint");
+
+        assert_eq!(resolved, html_path);
+        assert_eq!(relative, "wasm-web/example/index.html");
+
+        fs::remove_dir_all(upload_dir).expect("cleanup");
+    }
+
+    #[test]
     fn rejects_defold_entrypoint_escape() {
         let upload_dir = temp_upload_dir("escape");
         fs::create_dir_all(&upload_dir).expect("create upload dir");

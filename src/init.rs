@@ -468,6 +468,12 @@ pub async fn handle_init() -> Result<()> {
     );
     std::fs::write(&config_path, &toml_content)?;
 
+    if detected.engine_type == EngineType::Defold {
+        cliclack::log::info(
+            "Set `entrypoint` in wavedash.toml to your Defold HTML export before running `wavedash dev`.",
+        )?;
+    }
+
     let website_host = config::get("open_browser_website_host")?;
     cliclack::outro(format!(
         "Created wavedash.toml! Next steps:\n  → Run `wavedash dev` to test locally\n  → Run `wavedash build push` to upload a build\n  → Manage your game at {}/dev-portal/{}/{}",

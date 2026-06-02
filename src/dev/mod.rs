@@ -103,9 +103,18 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
     })?;
 
     let engine_kind = wavedash_config.engine_type()?;
+    let defold_entrypoint = match engine_kind {
+        Some(EngineKind::Defold) => Some(resolve_defold_entrypoint(
+            &upload_dir,
+            wavedash_config.entrypoint.as_deref(),
+        )?),
+        _ => None,
+    };
 
-    let entrypoint = match engine_kind {
-        Some(EngineKind::Defold) => wavedash_config.entrypoint.as_deref().map(str::to_string),
+    let entrypoint = match (&engine_kind, &defold_entrypoint) {
+        (Some(EngineKind::Defold), Some((_, html_relative_path))) => {
+            Some(html_relative_path.to_string())
+        }
         _ => wavedash_config.entrypoint().map(str::to_string),
     };
 
@@ -126,16 +135,17 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
             Some(fetch_entrypoint_params(engine_label, ver, &html_path, None).await?)
         }
         Some(EngineKind::Defold) => {
-            let (html_path, html_relative_path) =
-                resolve_defold_entrypoint(&upload_dir, wavedash_config.entrypoint.as_deref())?;
+            let (html_path, html_relative_path) = defold_entrypoint
+                .as_ref()
+                .expect("defold entrypoint resolved");
             let ver = engine_version
                 .ok_or_else(|| anyhow::anyhow!("DEFOLD engine requires a version"))?;
             Some(
                 fetch_entrypoint_params(
                     EngineKind::Defold.as_label(),
                     ver,
-                    &html_path,
-                    Some(&html_relative_path),
+                    html_path,
+                    Some(html_relative_path.as_str()),
                 )
                 .await?,
             )
