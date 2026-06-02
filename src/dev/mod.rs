@@ -13,7 +13,7 @@ pub(crate) mod entrypoint;
 mod launcher;
 
 use dev_app::{ensure_dev_app, user_data_dir};
-use entrypoint::{fetch_entrypoint_params, locate_html_entrypoint};
+use entrypoint::{fetch_entrypoint_params, locate_html_entrypoint, resolve_defold_entrypoint};
 use launcher::{run_dev_app, DevAppConfig};
 
 #[derive(Debug, Deserialize)]
@@ -108,12 +108,11 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
 
     FileStaging::prepare(&upload_dir, &wavedash_config)?;
 
-    let html_entrypoint = locate_html_entrypoint(&upload_dir);
     let engine_version = wavedash_config.engine_version();
     let entrypoint_params = match engine_kind {
-        Some(EngineKind::Godot | EngineKind::Unity | EngineKind::Defold) => {
-            let engine_label = engine_kind.unwrap().as_label();
-            let html_path = html_entrypoint.as_deref().ok_or_else(|| {
+        Some(kind @ (EngineKind::Godot | EngineKind::Unity)) => {
+            let engine_label = kind.as_label();
+            let html_path = locate_html_entrypoint(&upload_dir).ok_or_else(|| {
                 anyhow::anyhow!(
                     "No HTML file found in upload_dir; required for {} builds",
                     engine_label
@@ -123,12 +122,27 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
                 .ok_or_else(|| anyhow::anyhow!("{} engine requires a version", engine_label))?;
             let html_relative_path = html_path
                 .strip_prefix(&upload_dir)
-                .unwrap_or(html_path)
+                .unwrap_or(&html_path)
                 .to_string_lossy()
                 .replace('\\', "/");
             Some(
-                fetch_entrypoint_params(engine_label, ver, html_path, Some(&html_relative_path))
+                fetch_entrypoint_params(engine_label, ver, &html_path, Some(&html_relative_path))
                     .await?,
+            )
+        }
+        Some(EngineKind::Defold) => {
+            let (html_path, html_relative_path) =
+                resolve_defold_entrypoint(&upload_dir, wavedash_config.entrypoint.as_deref())?;
+            let ver = engine_version
+                .ok_or_else(|| anyhow::anyhow!("DEFOLD engine requires a version"))?;
+            Some(
+                fetch_entrypoint_params(
+                    EngineKind::Defold.as_label(),
+                    ver,
+                    &html_path,
+                    Some(&html_relative_path),
+                )
+                .await?,
             )
         }
         Some(EngineKind::JsDos | EngineKind::Ruffle | EngineKind::RenPy) => {

@@ -1,6 +1,6 @@
 use crate::auth::AuthManager;
 use crate::config::{self, EngineKind, WavedashConfig};
-use crate::dev::entrypoint::{fetch_entrypoint_params, locate_html_entrypoint};
+use crate::dev::entrypoint::{fetch_entrypoint_params, resolve_defold_entrypoint};
 use crate::file_staging::FileStaging;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -162,22 +162,15 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
     let engine_version = wavedash_config.engine_version();
     let entrypoint_params = match engine_kind {
         Some(EngineKind::Defold) => {
-            let html_entrypoint = locate_html_entrypoint(&upload_dir);
-            let html_path = html_entrypoint.as_deref().ok_or_else(|| {
-                anyhow::anyhow!("No HTML file found in upload_dir; required for DEFOLD builds")
-            })?;
+            let (html_path, html_relative_path) =
+                resolve_defold_entrypoint(&upload_dir, wavedash_config.entrypoint.as_deref())?;
             let ver = engine_version
                 .ok_or_else(|| anyhow::anyhow!("DEFOLD engine requires a version"))?;
-            let html_relative_path = html_path
-                .strip_prefix(&upload_dir)
-                .unwrap_or(html_path)
-                .to_string_lossy()
-                .replace('\\', "/");
             Some(
                 fetch_entrypoint_params(
                     EngineKind::Defold.as_label(),
                     ver,
-                    html_path,
+                    &html_path,
                     Some(&html_relative_path),
                 )
                 .await?,

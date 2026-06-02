@@ -253,6 +253,12 @@ fn generate_toml(
         }
         EngineType::Defold => {
             let version = engine_version.unwrap_or("1.12.4");
+            // `entrypoint` is a top-level key, so the hint must precede the [defold]
+            // table. Left commented — the dev fills in the export they want to ship;
+            // `wavedash dev` / `build push` errors clearly until they do.
+            toml.push_str(
+                "\n# Defold HTML5 bundles can contain both wasm-web/ and js-web/ folders.\n# Set `entrypoint` (top-level) to the index.html you want to ship, e.g.:\n#   entrypoint = \"wasm-web/<game>/index.html\"\n",
+            );
             toml.push_str(&format!("\n[defold]\nversion = \"{}\"\n", version));
         }
         EngineType::Custom => {

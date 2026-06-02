@@ -14,15 +14,17 @@ struct EntrypointParamsResponse {
     entrypoint_params: Value,
 }
 
-// A root `index.html` short-circuits; the ranking below only matters for nested
-// multi-HTML Defold dists.
+/// Locate the HTML entrypoint for engines that ship a single root export
+/// (Godot, Unity): a root `index.html`, falling back to the first `.html` found.
+/// Defold doesn't use this — it parses the explicit `entrypoint` from
+/// wavedash.toml, since its bundles can nest the HTML under `wasm-web`/`js-web`
+/// and ship more than one. No "which export is newest" guessing lives here.
 pub fn locate_html_entrypoint(upload_dir: &Path) -> Option<PathBuf> {
     let default_index = upload_dir.join("index.html");
     if default_index.is_file() {
         return Some(default_index);
     }
 
-    let mut html_files: Vec<PathBuf> = Vec::new();
     for entry in WalkDir::new(upload_dir)
         .min_depth(1)
         .into_iter()
@@ -31,52 +33,38 @@ pub fn locate_html_entrypoint(upload_dir: &Path) -> Option<PathBuf> {
         if entry.file_type().is_file() {
             if let Some(ext) = entry.path().extension() {
                 if ext.eq_ignore_ascii_case("html") {
-                    html_files.push(entry.into_path());
+                    return Some(entry.into_path());
                 }
             }
         }
     }
 
-    // Match the arch folder as any path segment (Defold nests it under a game dir).
-    let architecture_score = |relative: &str| {
-        let mut segments = relative.split('/');
-        if segments.clone().any(|s| s == "wasm-web") {
-            0
-        } else if segments.any(|s| s == "js-web") {
-            1
-        } else {
-            2
-        }
-    };
+    None
+}
 
-    // Compute each candidate's sort key once (stat + strip_prefix), so sorting
-    // doesn't re-stat on every comparison.
-    let mut ranked: Vec<(std::time::SystemTime, i32, String, PathBuf)> = html_files
-        .into_iter()
-        .map(|path| {
-            let modified = path
-                .metadata()
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::UNIX_EPOCH);
-            let relative = path
-                .strip_prefix(upload_dir)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            let arch = architecture_score(&relative);
-            (modified, arch, relative, path)
-        })
-        .collect();
-
-    // Newest export wins; wasm-web beats js-web only on ties, then path. Unreadable
-    // mtime falls back to UNIX_EPOCH (oldest) so it can't sort as "newest".
-    ranked.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then_with(|| a.1.cmp(&b.1))
-            .then_with(|| a.2.cmp(&b.2))
-    });
-
-    ranked.into_iter().next().map(|(_, _, _, path)| path)
+/// Resolve the developer-named Defold entrypoint HTML to its absolute path plus
+/// normalized build-relative path. Defold names its entrypoint explicitly (a
+/// bundle can ship both `wasm-web/` and `js-web/`), so there's no inference here
+/// — a missing or wrong path is a clear error, not a guess.
+pub fn resolve_defold_entrypoint(
+    upload_dir: &Path,
+    entrypoint: Option<&str>,
+) -> Result<(PathBuf, String)> {
+    let entrypoint = entrypoint.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Defold builds need an `entrypoint` in wavedash.toml pointing to your HTML5 export, e.g.\n  entrypoint = \"wasm-web/<game>/index.html\"\n(a Defold bundle can contain both wasm-web/ and js-web/ — pick one)"
+        )
+    })?;
+    let relative_path = entrypoint.replace('\\', "/");
+    let html_path = upload_dir.join(&relative_path);
+    if !html_path.is_file() {
+        anyhow::bail!(
+            "Defold entrypoint `{}` not found under {}. Point `entrypoint` in wavedash.toml at your export's index.html.",
+            entrypoint,
+            upload_dir.display()
+        );
+    }
+    Ok((html_path, relative_path))
 }
 
 pub async fn fetch_entrypoint_params(
