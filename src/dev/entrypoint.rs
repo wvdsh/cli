@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -56,6 +56,30 @@ pub fn resolve_defold_entrypoint(
         )
     })?;
     let relative_path = entrypoint.replace('\\', "/");
+    let entrypoint_path = Path::new(&relative_path);
+    if entrypoint_path.is_absolute()
+        || entrypoint_path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        anyhow::bail!(
+            "Defold entrypoint `{}` must be a relative path inside upload_dir ({}).",
+            entrypoint,
+            upload_dir.display()
+        );
+    }
+
+    let lower = relative_path.to_ascii_lowercase();
+    if !lower.ends_with(".html") && !lower.ends_with(".htm") {
+        anyhow::bail!(
+            "Defold entrypoint `{}` must be an HTML file (.html/.htm).",
+            entrypoint
+        );
+    }
+
     let html_path = upload_dir.join(&relative_path);
     if !html_path.is_file() {
         anyhow::bail!(
@@ -64,6 +88,21 @@ pub fn resolve_defold_entrypoint(
             upload_dir.display()
         );
     }
+
+    let canonical_upload_dir = upload_dir
+        .canonicalize()
+        .with_context(|| format!("Failed to canonicalize {}", upload_dir.display()))?;
+    let canonical_html_path = html_path
+        .canonicalize()
+        .with_context(|| format!("Failed to canonicalize {}", html_path.display()))?;
+    if !canonical_html_path.starts_with(&canonical_upload_dir) {
+        anyhow::bail!(
+            "Defold entrypoint `{}` resolves outside upload_dir ({}).",
+            entrypoint,
+            upload_dir.display()
+        );
+    }
+
     Ok((html_path, relative_path))
 }
 
@@ -76,20 +115,21 @@ pub async fn fetch_entrypoint_params(
     let html_content = fs::read_to_string(html_path)
         .with_context(|| format!("Failed to read {}", html_path.display()))?;
     let api_host = config::get("api_host")?;
-    let endpoint = format!(
-        "{}/cli/entrypoint-params",
-        api_host.trim_end_matches('/')
-    );
+    let endpoint = format!("{}/cli/entrypoint-params", api_host.trim_end_matches('/'));
+
+    let mut body = serde_json::json!({
+        "engine": engine,
+        "engineVersion": engine_version,
+        "htmlContent": html_content,
+    });
+    if let Some(html_path) = html_relative_path {
+        body["htmlPath"] = serde_json::json!(html_path);
+    }
 
     let client = config::create_http_client()?;
     let response = client
         .post(&endpoint)
-        .json(&serde_json::json!({
-            "engine": engine,
-            "engineVersion": engine_version,
-            "htmlContent": html_content,
-            "htmlPath": html_relative_path,
-        }))
+        .json(&body)
         .send()
         .await
         .with_context(|| "Failed to call CLI entrypoint params endpoint")?;
@@ -105,4 +145,66 @@ pub async fn fetch_entrypoint_params(
         serde_json::from_str(&body).with_context(|| "Failed to parse CLI response")?;
 
     Ok(parsed.entrypoint_params)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_upload_dir(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "wavedash-cli-entrypoint-{name}-{}-{unique}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn resolves_defold_entrypoint_inside_upload_dir() {
+        let upload_dir = temp_upload_dir("inside");
+        let html_path = upload_dir.join("wasm-web/example/index.html");
+        fs::create_dir_all(html_path.parent().expect("html parent")).expect("create dirs");
+        fs::write(&html_path, "<html></html>").expect("write html");
+
+        let (resolved, relative) =
+            resolve_defold_entrypoint(&upload_dir, Some("wasm-web/example/index.html"))
+                .expect("resolve entrypoint");
+
+        assert_eq!(resolved, html_path);
+        assert_eq!(relative, "wasm-web/example/index.html");
+
+        fs::remove_dir_all(upload_dir).expect("cleanup");
+    }
+
+    #[test]
+    fn rejects_defold_entrypoint_escape() {
+        let upload_dir = temp_upload_dir("escape");
+        fs::create_dir_all(&upload_dir).expect("create upload dir");
+
+        let err = resolve_defold_entrypoint(&upload_dir, Some("../index.html"))
+            .expect_err("escape should fail");
+
+        assert!(err.to_string().contains("relative path inside upload_dir"));
+
+        fs::remove_dir_all(upload_dir).expect("cleanup");
+    }
+
+    #[test]
+    fn rejects_defold_entrypoint_non_html() {
+        let upload_dir = temp_upload_dir("non-html");
+        let asset_path = upload_dir.join("wasm-web/example/something.png");
+        fs::create_dir_all(asset_path.parent().expect("asset parent")).expect("create dirs");
+        fs::write(&asset_path, "not html").expect("write asset");
+
+        let err = resolve_defold_entrypoint(&upload_dir, Some("wasm-web/example/something.png"))
+            .expect_err("non-html entrypoint should fail");
+
+        assert!(err.to_string().contains("HTML file"));
+
+        fs::remove_dir_all(upload_dir).expect("cleanup");
+    }
 }

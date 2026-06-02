@@ -104,7 +104,10 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
 
     let engine_kind = wavedash_config.engine_type()?;
 
-    let entrypoint = wavedash_config.entrypoint().map(|s| s.to_string());
+    let entrypoint = match engine_kind {
+        Some(EngineKind::Defold) => wavedash_config.entrypoint.as_deref().map(str::to_string),
+        _ => wavedash_config.entrypoint().map(str::to_string),
+    };
 
     FileStaging::prepare(&upload_dir, &wavedash_config)?;
 
@@ -120,15 +123,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
             })?;
             let ver = engine_version
                 .ok_or_else(|| anyhow::anyhow!("{} engine requires a version", engine_label))?;
-            let html_relative_path = html_path
-                .strip_prefix(&upload_dir)
-                .unwrap_or(&html_path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            Some(
-                fetch_entrypoint_params(engine_label, ver, &html_path, Some(&html_relative_path))
-                    .await?,
-            )
+            Some(fetch_entrypoint_params(engine_label, ver, &html_path, None).await?)
         }
         Some(EngineKind::Defold) => {
             let (html_path, html_relative_path) =

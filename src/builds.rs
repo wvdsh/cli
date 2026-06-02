@@ -159,6 +159,10 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
     }
 
     let engine_kind = wavedash_config.engine_type()?;
+    let entrypoint = match engine_kind {
+        Some(EngineKind::Defold) => wavedash_config.entrypoint.as_deref(),
+        _ => wavedash_config.entrypoint(),
+    };
     let engine_version = wavedash_config.engine_version();
     let entrypoint_params = match engine_kind {
         Some(EngineKind::Defold) => {
@@ -190,7 +194,7 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
         &wavedash_config.game_id,
         engine_kind.map(|e| e.as_label()),
         engine_version,
-        wavedash_config.entrypoint(),
+        entrypoint,
         entrypoint_params,
         message.as_deref(),
         total_bytes,
