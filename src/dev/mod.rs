@@ -204,7 +204,7 @@ async fn resolve_engine_entry(
     // single source shared with prod's embed.js — so new engine versions work
     // here the moment play deploys, with no CLI update. An unresolvable
     // version 404s when the shell loads the script; the shell surfaces the
-    // resolver's message in the loading gate (engine_shell.html onerror).
+    // resolver's message in the loading gate (shell.html onerror).
     let entrypoint_url = format!(
         "{}/default-entrypoint.js?engine={}&engineVersion={}",
         config::get("play_statics_origin")?,

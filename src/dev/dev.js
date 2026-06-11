@@ -1,19 +1,21 @@
 // Served at /__wavedash/dev.js and injected right after the SDK bundle tag,
 // before any game script parses.
 (function () {
-	// Called by engine_shell.html when the default-entrypoint script fails to
-	// load — re-fetch it to read the resolver's error body (e.g. "No
-	// entrypoint found for GODOT version ..."), shown by the gate below.
+	// Called by shell.html when the entry script (play's default entrypoint,
+	// or the game's own .js) fails to load — re-fetch it to read the error
+	// body (e.g. "No entrypoint found for GODOT version ..."), shown by the
+	// gate below.
 	window.__wavedashEntrypointError = function (src) {
 		fetch(src, { cache: 'no-store' })
 			.then(function (res) {
-				return res.ok ? 'Failed to run engine boot script: ' + src : res.text();
+				return res.ok ? '' : res.text();
 			})
 			.catch(function () {
-				return 'Failed to load engine boot script: ' + src;
+				return '';
 			})
-			.then(function (message) {
-				window.__wavedashBootError = message;
+			.then(function (body) {
+				window.__wavedashBootError =
+					body.trim() || 'Failed to load entrypoint script: ' + src;
 			});
 	};
 

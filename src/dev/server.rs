@@ -42,8 +42,7 @@ const INJECT_URL: &str = "https://cdn.jsdelivr.net/npm/@wvdsh/sdk-js@latest/dist
 
 /// Templates embedded at compile time. `{{NAME}}` placeholders are
 /// substituted with values — all logic lives in the templates.
-const SYNTH_SHELL_TEMPLATE: &str = include_str!("synth_shell.html");
-const ENGINE_SHELL_TEMPLATE: &str = include_str!("engine_shell.html");
+const SHELL_TEMPLATE: &str = include_str!("shell.html");
 const DEV_JS: &str = include_str!("dev.js");
 
 const TEXT: &str = "text/plain; charset=utf-8";
@@ -252,10 +251,12 @@ async fn handle_index(
     }
 
     if let Some(engine_entry) = &cfg.engine_entry {
-        return respond(StatusCode::OK, HTML, None, engine_shell(engine_entry));
+        let html = shell(&engine_entry.entrypoint_url, Some(&engine_entry.params_json));
+        return respond(StatusCode::OK, HTML, None, html);
     }
     if cfg.entry.ends_with(".js") {
-        return respond(StatusCode::OK, HTML, None, synth_shell(&cfg.entry));
+        let html = shell(&format!("/{}", cfg.entry), None);
+        return respond(StatusCode::OK, HTML, None, html);
     }
     // Serve the HTML entry at its real path (so relative asset URLs resolve),
     // carrying this browser's query along.
@@ -325,28 +326,19 @@ fn respond(
     builder.body(body.into()).unwrap()
 }
 
-/// Empty shell for `.js` entrypoints (synth_shell.html) — same shape as
-/// play's default embed shell.
-fn synth_shell(entry: &str) -> String {
-    SYNTH_SHELL_TEMPLATE
-        .replace("{{INJECT_URL}}", INJECT_URL)
-        .replace("{{ENTRY_SRC}}", &html_attr_escape(&format!("/{entry}")))
-}
-
-/// Shell for engine builds (engine_shell.html): boots the engine through
-/// play's real default entrypoint, exactly like prod — no recreated engine
-/// logic. The `<` escape keeps any params value from closing the script tag.
-fn engine_shell(entry: &EngineEntry) -> String {
-    ENGINE_SHELL_TEMPLATE
+/// The boot shell (shell.html), same shape as play's default embed shell.
+/// Engine builds run play's real default entrypoint with its params — the
+/// prod path, no recreated engine logic; `.js` entries run the game's own
+/// script with `entrypointParams = null`. The `<` escape keeps any params
+/// value from closing the script tag.
+fn shell(script_src: &str, params_json: Option<&str>) -> String {
+    SHELL_TEMPLATE
         .replace("{{INJECT_URL}}", INJECT_URL)
         .replace(
             "{{ENTRYPOINT_PARAMS}}",
-            &entry.params_json.replace('<', "\\u003c"),
+            &params_json.unwrap_or("null").replace('<', "\\u003c"),
         )
-        .replace(
-            "{{ENTRYPOINT_URL}}",
-            &html_attr_escape(&entry.entrypoint_url),
-        )
+        .replace("{{SCRIPT_SRC}}", &html_attr_escape(script_src))
 }
 
 /// The pair of parser-blocking tags injected into game HTML: the SDK bundle

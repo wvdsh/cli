@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<meta name="color-scheme" content="light dark" />
+		<title>Wavedash Dev</title>
+		<style>
+			html,
+			body {
+				height: 100%;
+				margin: 0;
+			}
+			/* Engine default entrypoints boot into this target (play's embed
+			   contract). While empty — always, for plain .js entries — it must
+			   not paint or steal the page's clicks, but visibility (not display)
+			   keeps its viewport dimensions for entrypoints that measure before
+			   mounting. */
+			#wavedash-target {
+				position: fixed;
+				inset: 0;
+				background: #000;
+			}
+			#wavedash-target:empty {
+				visibility: hidden;
+			}
+		</style>
+		<!-- Same pair injected into custom HTML games: parser-blocking SDK
+		     bundle (window.Wavedash before anything else), then the init gate. -->
+		<script src="{{INJECT_URL}}" crossorigin="anonymous"></script>
+		<script src="/__wavedash/dev.js"></script>
+		<script>
+			// Play's embed-shell contract, read by engine default entrypoints;
+			// null when the entry is the game's own script.
+			window.entrypointParams = {{ENTRYPOINT_PARAMS}};
+		</script>
+	</head>
+	<body>
+		<div id="wavedash-target"></div>
+		<!-- Engine builds: play's real default entrypoint — the exact script
+		     prod boots the engine with. Custom builds: the game's own .js
+		     entry. On load failure (e.g. unsupported engine version → 404)
+		     the gate shows the resolver's message instead of spinning. -->
+		<script src="{{SCRIPT_SRC}}" onerror="__wavedashEntrypointError(this.src)"></script>
+	</body>
+</html>
