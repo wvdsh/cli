@@ -9,10 +9,12 @@
 //!
 //! Auth is per-browser so multiple browsers each play as their own user
 //! (signed-in accounts, or anonymous users for e.g. incognito windows): `/`
-//! without credentials bounces to the mainsite /auth/dev, which mints a 1-day
-//! gameplay SESSION for that browser and redirects back to
-//! /__wavedash/callback. The callback stores the session token in a localhost
-//! cookie and lands on the game with that user's `?sdkconfig=`.
+//! without credentials bounces to the mainsite /auth/dev, which mints a
+//! short-lived playKey for that browser and redirects back to
+//! /__wavedash/callback. The callback exchanges the playKey server-side for a
+//! 1-day gameplay SESSION (prod's play-iframe pattern — no long-lived
+//! credential in any URL), stores the session token in a localhost cookie,
+//! and lands on the game with that user's `?sdkconfig=`.
 //! `POST /auth/refresh` exchanges the requesting browser's session token for
 //! a fresh gameplay JWT via the backend's /api/dev/refresh-gameplay (API-key
 //! authed), so play renews silently for the session's lifetime. The server
@@ -150,13 +152,23 @@ fn truncate(s: &str, max: usize) -> String {
 
 #[derive(Deserialize)]
 struct CallbackParams {
-    session_token: String,
+    play_key: String,
     sdkconfig: String,
     state: String,
 }
 
-/// Store this browser's gameplay session token in a cookie, then send it into
-/// the game with its own `?sdkconfig=` (read by `setupWavedashSDK()`).
+#[derive(Deserialize)]
+struct ExchangeResponse {
+    #[serde(rename = "sessionToken")]
+    session_token: String,
+}
+
+/// The auth callback carries a short-lived single-purpose playKey (the same
+/// credential prod's play iframe boots from) — never the session token, so no
+/// long-lived credential rides in a URL. Exchange it server-side for this
+/// browser's 1-day gameplay session, store that in the cookie, then send the
+/// browser into the game with its own `?sdkconfig=` (read by
+/// `setupWavedashSDK()`).
 async fn handle_callback(
     State(cfg): State<Arc<ServeConfig>>,
     Query(p): Query<CallbackParams>,
@@ -164,16 +176,46 @@ async fn handle_callback(
     if p.state != cfg.state_token {
         return respond(StatusCode::BAD_REQUEST, TEXT, None, "Unexpected state");
     }
+
+    let url = format!("{}/api/dev/exchange-playkey", cfg.api_host);
+    let upstream = cfg
+        .client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.api_key))
+        .json(&serde_json::json!({ "playKey": p.play_key }))
+        .send()
+        .await;
+
+    let session_token = match upstream {
+        Ok(res) if res.status().is_success() => match res.json::<ExchangeResponse>().await {
+            Ok(body) => body.session_token,
+            Err(_) => {
+                return respond(StatusCode::BAD_GATEWAY, TEXT, None, "Bad exchange response")
+            }
+        },
+        // Expired playKey (the redirect sat unfollowed past its 2-minute TTL,
+        // e.g. a restored tab). Re-opening the game URL mints a fresh one.
+        Ok(_) => {
+            return respond(
+                StatusCode::UNAUTHORIZED,
+                TEXT,
+                None,
+                "Sign-in handoff expired — reopen the game URL",
+            )
+        }
+        Err(err) => {
+            eprintln!("exchange-playkey request failed: {err}");
+            return respond(StatusCode::BAD_GATEWAY, TEXT, None, "Exchange failed");
+        }
+    };
+
     let location = format!("/?sdkconfig={}", urlencoding::encode(&p.sdkconfig));
     Response::builder()
         .status(StatusCode::SEE_OTHER)
         .header(header::LOCATION, location)
         .header(
             header::SET_COOKIE,
-            format!(
-                "{SESSION_COOKIE}={}; Path=/; HttpOnly; SameSite=Lax",
-                p.session_token
-            ),
+            format!("{SESSION_COOKIE}={session_token}; Path=/; HttpOnly; SameSite=Lax"),
         )
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::empty())
