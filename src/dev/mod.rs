@@ -168,12 +168,15 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
             upload_dir,
             entry,
             verbose,
+            port,
+            build_uuid: local_build.uuid,
             state_token,
             auth_url,
             api_key,
             api_host,
             client,
             engine_entry,
+            jwks: tokio::sync::OnceCell::new(),
         },
     )
     .await

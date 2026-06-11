@@ -35,14 +35,15 @@ const DEV_JS: &str = include_str!("dev.js");
 const TEXT: &str = "text/plain; charset=utf-8";
 const HTML: &str = "text/html; charset=utf-8";
 
-/// Per-browser gameplay session token (HttpOnly — page JS never needs it).
-const SESSION_COOKIE: &str = "wd_session";
-
 pub struct ServeConfig {
     pub upload_dir: PathBuf,
     /// Entry filename relative to upload_dir (e.g. `index.html` or `game.js`).
     pub entry: String,
     pub verbose: bool,
+    /// Cookies are host-scoped, so names carry the port or build uuid to keep
+    /// concurrent and successive dev servers from clobbering each other.
+    pub port: u16,
+    pub build_uuid: String,
     /// Echoed back on the auth callback; must match or the handoff is rejected.
     pub state_token: String,
     /// Mainsite /auth/dev URL that `/` bounces credential-less browsers to.
@@ -53,6 +54,31 @@ pub struct ServeConfig {
     pub client: reqwest::Client,
     /// Engine builds boot via play's real default entrypoint — the prod path.
     pub engine_entry: Option<EngineEntry>,
+    /// Backend public keys (/.well-known/jwks.json), fetched once on demand.
+    pub jwks: tokio::sync::OnceCell<jsonwebtoken::jwk::JwkSet>,
+}
+
+impl ServeConfig {
+    /// Per-browser gameplay session token (HttpOnly — page JS never needs it).
+    /// Build-scoped: a relaunched server can reuse a port, but never a build.
+    fn session_cookie_name(&self) -> String {
+        format!("wd_session_{}", self.build_uuid)
+    }
+
+    /// Last issued gameplay JWT (HttpOnly) — reused by /auth/refresh while
+    /// still fresh, sparing the backend round-trip.
+    fn jwt_cookie_name(&self) -> String {
+        format!("wd_jwt_{}", self.build_uuid)
+    }
+
+    /// SDKConfig handed to the page; readable by JS — `setupWavedashSDK()`
+    /// falls back to it when the URL has no `?sdkconfig=`, keeping URLs clean.
+    /// Port-scoped because the page can only derive the port from location;
+    /// a stale port collision fails the build-scoped session check above and
+    /// re-runs the handoff.
+    fn sdkconfig_cookie_name(&self) -> String {
+        format!("wd_sdkconfig_{}", self.port)
+    }
 }
 
 pub struct EngineEntry {
@@ -142,6 +168,8 @@ struct CallbackParams {
 struct ExchangeResponse {
     #[serde(rename = "sessionToken")]
     session_token: String,
+    #[serde(rename = "gameplayJwt")]
+    gameplay_jwt: String,
 }
 
 /// The callback carries a short-lived playKey (prod's play-iframe credential),
@@ -164,9 +192,9 @@ async fn handle_callback(
         .send()
         .await;
 
-    let session_token = match upstream {
+    let exchange = match upstream {
         Ok(res) if res.status().is_success() => match res.json::<ExchangeResponse>().await {
-            Ok(body) => body.session_token,
+            Ok(body) => body,
             Err(_) => {
                 return respond(StatusCode::BAD_GATEWAY, TEXT, None, "Bad exchange response")
             }
@@ -186,13 +214,33 @@ async fn handle_callback(
         }
     };
 
-    let location = format!("/?sdkconfig={}", urlencoding::encode(&p.sdkconfig));
     Response::builder()
         .status(StatusCode::SEE_OTHER)
-        .header(header::LOCATION, location)
+        .header(header::LOCATION, "/")
         .header(
             header::SET_COOKIE,
-            format!("{SESSION_COOKIE}={session_token}; Path=/; HttpOnly; SameSite=Lax"),
+            format!(
+                "{}={}; Path=/; HttpOnly; SameSite=Lax",
+                cfg.session_cookie_name(),
+                exchange.session_token
+            ),
+        )
+        .header(
+            header::SET_COOKIE,
+            format!(
+                "{}={}; Path=/; HttpOnly; SameSite=Lax",
+                cfg.jwt_cookie_name(),
+                exchange.gameplay_jwt
+            ),
+        )
+        // JS-readable: setupWavedashSDK boots from it, keeping the URL clean.
+        .header(
+            header::SET_COOKIE,
+            format!(
+                "{}={}; Path=/; SameSite=Lax",
+                cfg.sdkconfig_cookie_name(),
+                urlencoding::encode(&p.sdkconfig)
+            ),
         )
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::empty())
@@ -207,10 +255,18 @@ struct RefreshResponse {
 
 /// Exchange the browser's session cookie for a fresh gameplay JWT, so the
 /// SDK's refreshes renew for the session's day, not the first JWT's hour.
+/// The last JWT rides in a cookie and is served back while still fresh, so
+/// most refreshes never leave localhost.
 async fn handle_auth_refresh(State(cfg): State<Arc<ServeConfig>>, headers: HeaderMap) -> Response {
-    let Some(session_token) = session_cookie(&headers) else {
+    let Some(session_token) = cookie_value(&headers, &cfg.session_cookie_name()) else {
         return respond(StatusCode::UNAUTHORIZED, TEXT, None, "Auth not ready");
     };
+
+    if let Some(jwt) = cookie_value(&headers, &cfg.jwt_cookie_name()) {
+        if jwt_fresh(&cfg, &jwt).await {
+            return respond(StatusCode::OK, TEXT, None, jwt);
+        }
+    }
 
     let url = format!("{}/api/dev/refresh-gameplay", cfg.api_host);
     let upstream = cfg
@@ -223,17 +279,40 @@ async fn handle_auth_refresh(State(cfg): State<Arc<ServeConfig>>, headers: Heade
 
     match upstream {
         Ok(res) if res.status().is_success() => match res.json::<RefreshResponse>().await {
-            Ok(body) => respond(StatusCode::OK, TEXT, None, body.gameplay_jwt),
+            Ok(body) => Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, TEXT)
+                .header(header::CACHE_CONTROL, "no-store")
+                .header(
+                    header::SET_COOKIE,
+                    format!(
+                        "{}={}; Path=/; HttpOnly; SameSite=Lax",
+                        cfg.jwt_cookie_name(),
+                        body.gameplay_jwt
+                    ),
+                )
+                .body(Body::from(body.gameplay_jwt))
+                .unwrap(),
             Err(_) => respond(StatusCode::BAD_GATEWAY, TEXT, None, "Bad refresh response"),
         },
-        // Clear the dead cookie so the next reload re-runs the handoff.
+        // Clear the dead cookies so the next reload re-runs the handoff.
         Ok(_) => Response::builder()
             .status(StatusCode::UNAUTHORIZED)
             .header(header::CONTENT_TYPE, TEXT)
             .header(header::CACHE_CONTROL, "no-store")
             .header(
                 header::SET_COOKIE,
-                format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"),
+                format!(
+                    "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
+                    cfg.session_cookie_name()
+                ),
+            )
+            .header(
+                header::SET_COOKIE,
+                format!(
+                    "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
+                    cfg.jwt_cookie_name()
+                ),
             )
             .body(Body::from("Session expired"))
             .unwrap(),
@@ -244,23 +323,76 @@ async fn handle_auth_refresh(State(cfg): State<Arc<ServeConfig>>, headers: Heade
     }
 }
 
-fn session_cookie(headers: &HeaderMap) -> Option<String> {
+/// Refresh this long before `exp` so a JWT never dies mid-request.
+const JWT_REFRESH_MARGIN_SECS: u64 = 300;
+
+/// Verify the cookie'd JWT against the backend's public JWKS and the margin
+/// above. Any failure (unfetchable JWKS, unknown kid, bad signature, near
+/// expiry) just falls back to a real backend refresh.
+async fn jwt_fresh(cfg: &ServeConfig, jwt: &str) -> bool {
+    let jwks = cfg
+        .jwks
+        .get_or_try_init(|| async {
+            let url = format!("{}/.well-known/jwks.json", cfg.api_host);
+            let res = cfg.client.get(&url).send().await.map_err(|_| ())?;
+            res.json::<jsonwebtoken::jwk::JwkSet>().await.map_err(|_| ())
+        })
+        .await;
+    let Ok(jwks) = jwks else { return false };
+
+    let Ok(header) = jsonwebtoken::decode_header(jwt) else {
+        return false;
+    };
+    let Some(jwk) = header.kid.as_deref().and_then(|kid| jwks.find(kid)) else {
+        return false;
+    };
+    let Ok(key) = jsonwebtoken::DecodingKey::from_jwk(jwk) else {
+        return false;
+    };
+
+    let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256);
+    validation.validate_aud = false;
+    validation.validate_exp = false; // checked below with the refresh margin
+
+    #[derive(Deserialize)]
+    struct Claims {
+        exp: u64,
+    }
+    match jsonwebtoken::decode::<Claims>(jwt, &key, &validation) {
+        Ok(token) => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(u64::MAX);
+            token.claims.exp > now + JWT_REFRESH_MARGIN_SECS
+        }
+        Err(_) => false,
+    }
+}
+
+fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     let raw = headers.get(header::COOKIE)?.to_str().ok()?;
+    let prefix = format!("{name}=");
     raw.split(';')
         .map(str::trim)
-        .find_map(|pair| pair.strip_prefix(&format!("{SESSION_COOKIE}=")[..]))
+        .find_map(|pair| pair.strip_prefix(&prefix[..]))
         .map(str::to_string)
 }
 
-/// `?sdkconfig=` AND the session cookie get the game; anything else re-runs
-/// the handoff — a bare localhost visit works, and a reload heals a cleared
-/// cookie that left `?sdkconfig=` behind in the URL.
+fn has_credentials(cfg: &ServeConfig, headers: &HeaderMap) -> bool {
+    cookie_value(headers, &cfg.session_cookie_name()).is_some()
+        && cookie_value(headers, &cfg.sdkconfig_cookie_name()).is_some()
+}
+
+/// Browsers with this server's cookies get the game; anything else re-runs
+/// the handoff — a bare localhost visit works, and a reload heals cleared
+/// cookies or an expired session.
 async fn handle_index(
     State(cfg): State<Arc<ServeConfig>>,
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
-    if !has_sdkconfig(&uri) || session_cookie(&headers).is_none() {
+    if !has_credentials(&cfg, &headers) {
         return Redirect::to(&cfg.auth_url).into_response();
     }
 
@@ -282,16 +414,18 @@ async fn handle_static(
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
-    // `?sdkconfig=` without the cookie is stale state (cookies cleared) —
-    // re-run the handoff instead of serving a game whose auth will 401.
-    if has_sdkconfig(&uri) && session_cookie(&headers).is_none() {
+    let authed = has_credentials(&cfg, &headers);
+    // An HTML nav without this browser's cookies is stale state (cookies
+    // cleared) — re-run the handoff instead of serving a game that will 401.
+    if !authed && is_html_path(uri.path()) {
         return Redirect::to(&cfg.auth_url).into_response();
     }
-    serve_file(&cfg, uri.path(), has_sdkconfig(&uri))
+    serve_file(&cfg, uri.path(), authed)
 }
 
-fn has_sdkconfig(uri: &Uri) -> bool {
-    uri.query().is_some_and(|q| q.contains("sdkconfig="))
+fn is_html_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".html") || lower.ends_with(".htm")
 }
 
 /// The init gate (see dev.js).
@@ -299,9 +433,9 @@ async fn handle_dev_js() -> Response {
     respond(StatusCode::OK, "text/javascript; charset=utf-8", None, DEV_JS)
 }
 
-/// HTML navigations carrying `?sdkconfig=` get the SDK tags injected (prod's
-/// embed.js mechanism); everything else streams as-is.
-fn serve_file(cfg: &ServeConfig, url_path: &str, sdk_nav: bool) -> Response {
+/// Authed HTML navigations get the SDK tags injected (prod's embed.js
+/// mechanism); everything else streams as-is.
+fn serve_file(cfg: &ServeConfig, url_path: &str, authed: bool) -> Response {
     let Some(file_path) = resolve_path(&cfg.upload_dir, url_path) else {
         return respond(StatusCode::NOT_FOUND, TEXT, None, "Not Found");
     };
@@ -310,7 +444,7 @@ fn serve_file(cfg: &ServeConfig, url_path: &str, sdk_nav: bool) -> Response {
     };
 
     let (content_type, encoding) = content_type_and_encoding(url_path);
-    if sdk_nav && encoding.is_none() && content_type.starts_with("text/html") {
+    if authed && encoding.is_none() && content_type.starts_with("text/html") {
         let injected = inject_sdk(&String::from_utf8_lossy(&bytes));
         return respond(StatusCode::OK, HTML, None, injected);
     }
