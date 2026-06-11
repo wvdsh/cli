@@ -23,14 +23,16 @@
 				visibility: hidden;
 			}
 		</style>
-		<!-- Parser-blocking SDK bundle then init gate — the same pair injected
-		     into custom HTML games. -->
-		<script src="{{INJECT_URL}}" crossorigin="anonymous"></script>
-		<script src="/__wavedash/dev.js"></script>
 		<script>
 			// Play's embed-shell contract; null when the entry is the game's own script.
 			window.entrypointParams = {{ENTRYPOINT_PARAMS}};
+			// setupWavedashSDK falls back to this when the URL has no ?sdkconfig=.
+			window.__wavedashSdkConfig = {{SDK_CONFIG}};
 		</script>
+		<!-- Parser-blocking SDK bundle then init gate — the same trio injected
+		     into custom HTML games. -->
+		<script src="{{INJECT_URL}}" crossorigin="anonymous"></script>
+		<script src="/__wavedash/dev.js"></script>
 	</head>
 	<body>
 		<div id="wavedash-target"></div>

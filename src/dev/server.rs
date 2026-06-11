@@ -40,9 +40,8 @@ pub struct ServeConfig {
     /// Entry filename relative to upload_dir (e.g. `index.html` or `game.js`).
     pub entry: String,
     pub verbose: bool,
-    /// Cookies are host-scoped, so names carry the port or build uuid to keep
+    /// Cookies are host-scoped, so names carry the build uuid to keep
     /// concurrent and successive dev servers from clobbering each other.
-    pub port: u16,
     pub build_uuid: String,
     /// Echoed back on the auth callback; must match or the handoff is rejected.
     pub state_token: String,
@@ -71,13 +70,11 @@ impl ServeConfig {
         format!("wd_jwt_{}", self.build_uuid)
     }
 
-    /// SDKConfig handed to the page; readable by JS — `setupWavedashSDK()`
-    /// falls back to it when the URL has no `?sdkconfig=`, keeping URLs clean.
-    /// Port-scoped because the page can only derive the port from location;
-    /// a stale port collision fails the build-scoped session check above and
-    /// re-runs the handoff.
+    /// SDKConfig for this browser (HttpOnly) — inlined into every served page
+    /// as `window.__wavedashSdkConfig`, which `setupWavedashSDK()` falls back
+    /// to when the URL has no `?sdkconfig=`. Keeps game URLs clean.
     fn sdkconfig_cookie_name(&self) -> String {
-        format!("wd_sdkconfig_{}", self.port)
+        format!("wd_sdkconfig_{}", self.build_uuid)
     }
 }
 
@@ -233,11 +230,10 @@ async fn handle_callback(
                 exchange.gameplay_jwt
             ),
         )
-        // JS-readable: setupWavedashSDK boots from it, keeping the URL clean.
         .header(
             header::SET_COOKIE,
             format!(
-                "{}={}; Path=/; SameSite=Lax",
+                "{}={}; Path=/; HttpOnly; SameSite=Lax",
                 cfg.sdkconfig_cookie_name(),
                 urlencoding::encode(&p.sdkconfig)
             ),
@@ -379,9 +375,12 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn has_credentials(cfg: &ServeConfig, headers: &HeaderMap) -> bool {
-    cookie_value(headers, &cfg.session_cookie_name()).is_some()
-        && cookie_value(headers, &cfg.sdkconfig_cookie_name()).is_some()
+/// The decoded per-browser SDKConfig, present only when this browser also
+/// holds the session cookie — the pair is written atomically by the callback.
+fn browser_config(cfg: &ServeConfig, headers: &HeaderMap) -> Option<String> {
+    cookie_value(headers, &cfg.session_cookie_name())?;
+    let raw = cookie_value(headers, &cfg.sdkconfig_cookie_name())?;
+    Some(urlencoding::decode(&raw).map_or(raw.clone(), |d| d.into_owned()))
 }
 
 /// Browsers with this server's cookies get the game; anything else re-runs
@@ -392,16 +391,20 @@ async fn handle_index(
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
-    if !has_credentials(&cfg, &headers) {
+    let Some(config) = browser_config(&cfg, &headers) else {
         return Redirect::to(&cfg.auth_url).into_response();
-    }
+    };
 
     if let Some(engine_entry) = &cfg.engine_entry {
-        let html = shell(&engine_entry.entrypoint_url, Some(&engine_entry.params_json));
+        let html = shell(
+            &engine_entry.entrypoint_url,
+            Some(&engine_entry.params_json),
+            &config,
+        );
         return respond(StatusCode::OK, HTML, None, html);
     }
     if cfg.entry.ends_with(".js") {
-        let html = shell(&format!("/{}", cfg.entry), None);
+        let html = shell(&format!("/{}", cfg.entry), None, &config);
         return respond(StatusCode::OK, HTML, None, html);
     }
     // The HTML entry serves at its real path so relative assets resolve.
@@ -414,13 +417,13 @@ async fn handle_static(
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
-    let authed = has_credentials(&cfg, &headers);
+    let config = browser_config(&cfg, &headers);
     // An HTML nav without this browser's cookies is stale state (cookies
     // cleared) — re-run the handoff instead of serving a game that will 401.
-    if !authed && is_html_path(uri.path()) {
+    if config.is_none() && is_html_path(uri.path()) {
         return Redirect::to(&cfg.auth_url).into_response();
     }
-    serve_file(&cfg, uri.path(), authed)
+    serve_file(&cfg, uri.path(), config.as_deref())
 }
 
 fn is_html_path(path: &str) -> bool {
@@ -433,9 +436,9 @@ async fn handle_dev_js() -> Response {
     respond(StatusCode::OK, "text/javascript; charset=utf-8", None, DEV_JS)
 }
 
-/// Authed HTML navigations get the SDK tags injected (prod's embed.js
-/// mechanism); everything else streams as-is.
-fn serve_file(cfg: &ServeConfig, url_path: &str, authed: bool) -> Response {
+/// Authed HTML navigations get the config global + SDK tags injected (prod's
+/// embed.js mechanism); everything else streams as-is.
+fn serve_file(cfg: &ServeConfig, url_path: &str, config: Option<&str>) -> Response {
     let Some(file_path) = resolve_path(&cfg.upload_dir, url_path) else {
         return respond(StatusCode::NOT_FOUND, TEXT, None, "Not Found");
     };
@@ -444,9 +447,11 @@ fn serve_file(cfg: &ServeConfig, url_path: &str, authed: bool) -> Response {
     };
 
     let (content_type, encoding) = content_type_and_encoding(url_path);
-    if authed && encoding.is_none() && content_type.starts_with("text/html") {
-        let injected = inject_sdk(&String::from_utf8_lossy(&bytes));
-        return respond(StatusCode::OK, HTML, None, injected);
+    if let Some(config) = config {
+        if encoding.is_none() && content_type.starts_with("text/html") {
+            let injected = inject_sdk(&String::from_utf8_lossy(&bytes), config);
+            return respond(StatusCode::OK, HTML, None, injected);
+        }
     }
     respond(StatusCode::OK, content_type, encoding, bytes)
 }
@@ -474,22 +479,33 @@ fn respond(
 /// Boot shell: play's real default entrypoint for engine builds (the prod
 /// path), the game's own script with null params for `.js` entries. The `<`
 /// escape keeps params values from closing the script tag.
-fn shell(script_src: &str, params_json: Option<&str>) -> String {
+fn shell(script_src: &str, params_json: Option<&str>, config: &str) -> String {
     SHELL_TEMPLATE
         .replace("{{INJECT_URL}}", INJECT_URL)
         .replace(
             "{{ENTRYPOINT_PARAMS}}",
             &params_json.unwrap_or("null").replace('<', "\\u003c"),
         )
+        .replace("{{SDK_CONFIG}}", &js_string_literal(config))
         .replace("{{SCRIPT_SRC}}", &html_attr_escape(script_src))
 }
 
-/// Inject the SDK bundle + init gate right after `<head ...>`, or prepended
-/// if there's no head.
-fn inject_sdk(html: &str) -> String {
+/// JSON-string-escape plus `\u003c` for `<` so the value can't close the
+/// surrounding script tag.
+fn js_string_literal(s: &str) -> String {
+    serde_json::Value::String(s.to_string())
+        .to_string()
+        .replace('<', "\\u003c")
+}
+
+/// Inject the config global + SDK bundle + init gate right after
+/// `<head ...>`, or prepended if there's no head.
+fn inject_sdk(html: &str, config: &str) -> String {
     let tags = format!(
-        "<script src=\"{INJECT_URL}\" crossorigin=\"anonymous\"></script>\
-<script src=\"/__wavedash/dev.js\"></script>"
+        "<script>window.__wavedashSdkConfig = {};</script>\
+<script src=\"{INJECT_URL}\" crossorigin=\"anonymous\"></script>\
+<script src=\"/__wavedash/dev.js\"></script>",
+        js_string_literal(config)
     );
     match head_insert_pos(&html.to_ascii_lowercase()) {
         Some(pos) => format!("{}{}{}", &html[..pos], tags, &html[pos..]),

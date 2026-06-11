@@ -168,7 +168,6 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
             upload_dir,
             entry,
             verbose,
-            port,
             build_uuid: local_build.uuid,
             state_token,
             auth_url,
