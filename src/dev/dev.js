@@ -1,10 +1,7 @@
-// Served at /__wavedash/dev.js and injected right after the SDK bundle tag,
-// before any game script parses.
+// Injected right after the SDK bundle tag, before any game script parses.
 (function () {
-	// Called by shell.html when the entry script (play's default entrypoint,
-	// or the game's own .js) fails to load — re-fetch it to read the error
-	// body (e.g. "No entrypoint found for GODOT version ..."), shown by the
-	// gate below.
+	// Re-fetch the failed entry script to read its error body (e.g. the
+	// resolver's "No entrypoint found for GODOT ..."), surfaced by the gate.
 	window.__wavedashEntrypointError = function (src) {
 		fetch(src, { cache: 'no-store' })
 			.then(function (res) {
@@ -19,20 +16,16 @@
 			});
 	};
 
-	// A failed token refresh at boot (cleared cookies, expired session) shows
-	// up as an unhandled rejection from the SDK — turn it into a gate message.
-	// The server clears the dead cookie on 401, so a reload re-runs the
-	// zero-click handoff and recovers.
+	// A failed boot refresh (expired session) surfaces as an unhandled
+	// rejection; the server clears the cookie on 401, so a reload recovers.
 	window.addEventListener('unhandledrejection', function (event) {
 		if (String(event.reason).indexOf('Failed to refresh gameplay token') !== -1) {
 			window.__wavedashBootError = 'Your dev session expired — reload the page to sign back in.';
 		}
 	});
 
-	// Mirror prod's loading gate, but on the documented contract: the page
-	// stays covered until the game calls Wavedash.init(). Games that init
-	// during parse never see a frame of it. Translucent on purpose, so engine
-	// loading UI stays visible underneath.
+	// Covers the page until the game calls Wavedash.init() — stricter than
+	// prod's gate, deliberately. Translucent so engine loading UI shows through.
 	function initGate() {
 		if (window.Wavedash.initialized) return;
 		var style = document.createElement('style');

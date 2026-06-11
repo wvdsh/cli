@@ -1,24 +1,11 @@
-//! Local static file server for `wavedash dev`.
+//! Local static file server for `wavedash dev` — the game runs top-level at
+//! `http://localhost:<port>`; entry rule mirrors the play worker's embed.
 //!
-//! Serves the developer's build straight off disk, top-level at
-//! `http://localhost:<port>` — no Electron, no certs, no subdomains. Entry rule
-//! mirrors the play worker (`play/src/server/handlers/embed.tsx`):
-//!   - `.js` entrypoint  → synthesize an empty shell that loads it,
-//!   - HTML entrypoint   → serve it with the SDK bundle + dev script injected
-//!     as parser-blocking tags (same mechanism as prod's embed.js injection).
-//!
-//! Auth is per-browser so multiple browsers each play as their own user
-//! (signed-in accounts, or anonymous users for e.g. incognito windows): `/`
-//! without credentials bounces to the mainsite /auth/dev, which mints a
-//! short-lived playKey for that browser and redirects back to
-//! /__wavedash/callback. The callback exchanges the playKey server-side for a
-//! 1-day gameplay SESSION (prod's play-iframe pattern — no long-lived
-//! credential in any URL), stores the session token in a localhost cookie,
-//! and lands on the game with that user's `?sdkconfig=`.
-//! `POST /auth/refresh` exchanges the requesting browser's session token for
-//! a fresh gameplay JWT via the backend's /api/dev/refresh-gameplay (API-key
-//! authed), so play renews silently for the session's lifetime. The server
-//! itself holds no auth state.
+//! Auth is per-browser: credential-less requests bounce to the mainsite
+//! /auth/dev, which redirects back with a short-lived playKey that the
+//! callback exchanges server-side for a 1-day gameplay session (wd_session
+//! cookie) — no long-lived credential ever rides in a URL. /auth/refresh
+//! trades the cookie for fresh 1h gameplay JWTs. No auth state held here.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -36,22 +23,19 @@ use axum::{
 use serde::Deserialize;
 use tokio::net::TcpListener;
 
-/// Always `@latest`. A classic, parser-blocking IIFE bundle (deps inlined,
-/// auto-runs setupWavedashSDK) — the only way `window.Wavedash` can exist
-/// before a game's inline scripts parse; module scripts are always deferred.
-/// jsdelivr serves ACAO * + CORP cross-origin, satisfying our COEP.
+/// Always `@latest`. Classic parser-blocking IIFE (auto-runs setupWavedashSDK):
+/// the only way `window.Wavedash` exists before game scripts parse — module
+/// scripts are always deferred. jsdelivr sends ACAO * + CORP, satisfying COEP.
 const INJECT_URL: &str = "https://cdn.jsdelivr.net/npm/@wvdsh/sdk-js@latest/dist/inject.global.js";
 
-/// Templates embedded at compile time. `{{NAME}}` placeholders are
-/// substituted with values — all logic lives in the templates.
+/// `{{NAME}}` placeholders substitute data only — logic stays in the template.
 const SHELL_TEMPLATE: &str = include_str!("shell.html");
 const DEV_JS: &str = include_str!("dev.js");
 
 const TEXT: &str = "text/plain; charset=utf-8";
 const HTML: &str = "text/html; charset=utf-8";
 
-/// Per-browser gameplay session token, set by the auth callback. HttpOnly:
-/// only the server reads it (to answer /auth/refresh); page JS never needs it.
+/// Per-browser gameplay session token (HttpOnly — page JS never needs it).
 const SESSION_COOKIE: &str = "wd_session";
 
 pub struct ServeConfig {
@@ -67,16 +51,13 @@ pub struct ServeConfig {
     pub api_key: String,
     pub api_host: String,
     pub client: reqwest::Client,
-    /// Set for engine builds (Unity/Godot/JsDos/Ruffle): boot via play's real
-    /// default entrypoint instead of an HTML entry — the prod path.
+    /// Engine builds boot via play's real default entrypoint — the prod path.
     pub engine_entry: Option<EngineEntry>,
 }
 
 pub struct EngineEntry {
-    /// Play's default-entrypoint script for this engine/version.
     pub entrypoint_url: String,
-    /// `window.entrypointParams` JSON the entrypoint boots from — computed by
-    /// the same backend parsers prod runs at upload-complete.
+    /// `window.entrypointParams` JSON, from the same parsers prod runs at upload.
     pub params_json: String,
 }
 
@@ -163,12 +144,9 @@ struct ExchangeResponse {
     session_token: String,
 }
 
-/// The auth callback carries a short-lived single-purpose playKey (the same
-/// credential prod's play iframe boots from) — never the session token, so no
-/// long-lived credential rides in a URL. Exchange it server-side for this
-/// browser's 1-day gameplay session, store that in the cookie, then send the
-/// browser into the game with its own `?sdkconfig=` (read by
-/// `setupWavedashSDK()`).
+/// The callback carries a short-lived playKey (prod's play-iframe credential),
+/// never the session token — exchange it server-side and cookie the session,
+/// so no long-lived credential rides in a URL.
 async fn handle_callback(
     State(cfg): State<Arc<ServeConfig>>,
     Query(p): Query<CallbackParams>,
@@ -193,8 +171,7 @@ async fn handle_callback(
                 return respond(StatusCode::BAD_GATEWAY, TEXT, None, "Bad exchange response")
             }
         },
-        // Expired playKey (the redirect sat unfollowed past its 2-minute TTL,
-        // e.g. a restored tab). Re-opening the game URL mints a fresh one.
+        // Expired playKey (e.g. a tab restored past its 2-min TTL).
         Ok(_) => {
             return respond(
                 StatusCode::UNAUTHORIZED,
@@ -228,10 +205,8 @@ struct RefreshResponse {
     gameplay_jwt: String,
 }
 
-/// The SDK's `getAuthToken()` POSTs here (same-origin, cookies included). We
-/// exchange the requesting browser's session token for a FRESH gameplay JWT,
-/// so the SDK's expiry-triggered refreshes actually renew for the session's
-/// lifetime (1 day) instead of dying with the first JWT's hour.
+/// Exchange the browser's session cookie for a fresh gameplay JWT, so the
+/// SDK's refreshes renew for the session's day, not the first JWT's hour.
 async fn handle_auth_refresh(State(cfg): State<Arc<ServeConfig>>, headers: HeaderMap) -> Response {
     let Some(session_token) = session_cookie(&headers) else {
         return respond(StatusCode::UNAUTHORIZED, TEXT, None, "Auth not ready");
@@ -251,8 +226,7 @@ async fn handle_auth_refresh(State(cfg): State<Arc<ServeConfig>>, headers: Heade
             Ok(body) => respond(StatusCode::OK, TEXT, None, body.gameplay_jwt),
             Err(_) => respond(StatusCode::BAD_GATEWAY, TEXT, None, "Bad refresh response"),
         },
-        // Expired/revoked session. Clear the dead cookie so the next page
-        // load re-runs the handoff instead of serving a game that 401s again.
+        // Clear the dead cookie so the next reload re-runs the handoff.
         Ok(_) => Response::builder()
             .status(StatusCode::UNAUTHORIZED)
             .header(header::CONTENT_TYPE, TEXT)
@@ -278,11 +252,9 @@ fn session_cookie(headers: &HeaderMap) -> Option<String> {
         .map(str::to_string)
 }
 
-/// `/` routes into the game. A browser arriving with `?sdkconfig=` (set by the
-/// callback) AND its session cookie gets the game; anything else gets bounced
-/// through the mainsite auth, which zero-clicks back here — so a bare
-/// `localhost:<port>` visit always works, and a reload self-heals a browser
-/// whose cookie was cleared even though `?sdkconfig=` survived in the URL.
+/// `?sdkconfig=` AND the session cookie get the game; anything else re-runs
+/// the handoff — a bare localhost visit works, and a reload heals a cleared
+/// cookie that left `?sdkconfig=` behind in the URL.
 async fn handle_index(
     State(cfg): State<Arc<ServeConfig>>,
     headers: HeaderMap,
@@ -300,8 +272,7 @@ async fn handle_index(
         let html = shell(&format!("/{}", cfg.entry), None);
         return respond(StatusCode::OK, HTML, None, html);
     }
-    // Serve the HTML entry at its real path (so relative asset URLs resolve),
-    // carrying this browser's query along.
+    // The HTML entry serves at its real path so relative assets resolve.
     let query = uri.query().map(|q| format!("?{q}")).unwrap_or_default();
     Redirect::to(&format!("/{}{}", cfg.entry, query)).into_response()
 }
@@ -311,9 +282,8 @@ async fn handle_static(
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
-    // A game navigation (`?sdkconfig=`) without this browser's session cookie
-    // is stale state — e.g. cookies cleared while the URL kept its query.
-    // Re-run the handoff instead of serving a game whose auth will 401.
+    // `?sdkconfig=` without the cookie is stale state (cookies cleared) —
+    // re-run the handoff instead of serving a game whose auth will 401.
     if has_sdkconfig(&uri) && session_cookie(&headers).is_none() {
         return Redirect::to(&cfg.auth_url).into_response();
     }
@@ -329,9 +299,8 @@ async fn handle_dev_js() -> Response {
     respond(StatusCode::OK, "text/javascript; charset=utf-8", None, DEV_JS)
 }
 
-/// Resolve and serve a file from upload_dir. HTML navigations that carry
-/// `?sdkconfig=` get the SDK bundle + dev script injected as parser-blocking
-/// tags (mirroring prod's embed.js injection); everything else streams as-is.
+/// HTML navigations carrying `?sdkconfig=` get the SDK tags injected (prod's
+/// embed.js mechanism); everything else streams as-is.
 fn serve_file(cfg: &ServeConfig, url_path: &str, sdk_nav: bool) -> Response {
     let Some(file_path) = resolve_path(&cfg.upload_dir, url_path) else {
         return respond(StatusCode::NOT_FOUND, TEXT, None, "Not Found");
@@ -368,11 +337,9 @@ fn respond(
     builder.body(body.into()).unwrap()
 }
 
-/// The boot shell (shell.html), same shape as play's default embed shell.
-/// Engine builds run play's real default entrypoint with its params — the
-/// prod path, no recreated engine logic; `.js` entries run the game's own
-/// script with `entrypointParams = null`. The `<` escape keeps any params
-/// value from closing the script tag.
+/// Boot shell: play's real default entrypoint for engine builds (the prod
+/// path), the game's own script with null params for `.js` entries. The `<`
+/// escape keeps params values from closing the script tag.
 fn shell(script_src: &str, params_json: Option<&str>) -> String {
     SHELL_TEMPLATE
         .replace("{{INJECT_URL}}", INJECT_URL)
@@ -383,9 +350,8 @@ fn shell(script_src: &str, params_json: Option<&str>) -> String {
         .replace("{{SCRIPT_SRC}}", &html_attr_escape(script_src))
 }
 
-/// The pair of parser-blocking tags injected into game HTML: the SDK bundle
-/// (auto-runs setupWavedashSDK), then the engine seed + init gate. Inserted
-/// right after the opening `<head ...>` tag, or prepended if there's no head.
+/// Inject the SDK bundle + init gate right after `<head ...>`, or prepended
+/// if there's no head.
 fn inject_sdk(html: &str) -> String {
     let tags = format!(
         "<script src=\"{INJECT_URL}\" crossorigin=\"anonymous\"></script>\
@@ -418,8 +384,7 @@ fn html_attr_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// Resolve a request path to a real file inside `upload_dir`, rejecting any
-/// path that escapes it (canonicalize + containment check).
+/// Rejects any path that escapes `upload_dir`.
 fn resolve_path(upload_dir: &Path, url_path: &str) -> Option<PathBuf> {
     let rel = url_path.trim_start_matches('/');
     let decoded = urlencoding::decode(rel)

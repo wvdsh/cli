@@ -16,10 +16,8 @@ struct CreateLocalBuildResponse {
     uuid: String,
 }
 
-/// Register a local build for this run. Nothing is uploaded — the build row
-/// exists because gameplay JWTs are build-scoped. The JWTs themselves are
-/// minted per-browser via /auth/dev, so multiple browsers signed into
-/// different accounts each play as their own user.
+/// Nothing is uploaded — the build row exists because gameplay JWTs are
+/// build-scoped.
 async fn create_local_build(
     game_id: &str,
     engine: Option<&str>,
@@ -62,8 +60,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
         .get_api_key()
         .ok_or_else(|| anyhow::anyhow!("Not authenticated. Run 'wavedash auth login' first."))?;
 
-    // Best-effort sweep of the retired Electron dev-app cache that older CLI
-    // versions downloaded for `wavedash dev`.
+    // Best-effort sweep of the retired Electron dev-app cache.
     if let Ok(dir) = config::wavedash_dir() {
         for stale in ["dev-app", "dev-app-profile"] {
             let _ = std::fs::remove_dir_all(dir.join(stale));
@@ -93,11 +90,9 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
 
     FileStaging::prepare(&upload_dir, &wavedash_config)?;
 
-    // Entry rule, mirroring prod (play's embed.tsx): custom builds serve the
-    // dev's own entrypoint; engine builds boot through play's REAL default
-    // entrypoint (engine shell), fed by the same backend params parsers prod
-    // runs at upload — the engine's exported index.html is ignored, as in
-    // prod. RenPy is the exception: prod treats it as custom-HTML.
+    // Entry rule mirrors prod (play's embed.tsx): engine builds boot through
+    // play's real default entrypoint and ignore their exported index.html;
+    // RenPy counts as custom-HTML.
     let engine_kind = wavedash_config.engine_type()?;
     let entrypoint = wavedash_config.entrypoint().map(String::from);
     let api_host = config::get("api_host")?;
@@ -141,8 +136,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
     )
     .await?;
 
-    // Bind first so the auth callback URL knows the port. Each browser that
-    // hits `/` without credentials gets bounced through this URL and back.
+    // Bind first so the auth callback URL knows the port.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let state_token = generate_state();
@@ -185,11 +179,9 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
     .await
 }
 
-/// Resolve everything play's engine boot path needs: the default-entrypoint
-/// script for this engine/version, and the `entrypointParams` it reads.
-/// Unity/Godot params are parsed out of the engine's exported HTML by the
-/// backend — the same parsers prod runs at upload-complete — so local boot
-/// config is identical to what the build would get on wavedash.com.
+/// Resolve play's default-entrypoint URL and the `entrypointParams` it reads.
+/// Unity/Godot params come from the same backend parsers prod runs at upload,
+/// so local boot config matches wavedash.com.
 async fn resolve_engine_entry(
     kind: EngineKind,
     wavedash_config: &WavedashConfig,
@@ -200,11 +192,9 @@ async fn resolve_engine_entry(
     let version = wavedash_config.engine_version().ok_or_else(|| {
         anyhow::anyhow!("{} requires a version in wavedash.toml", kind.as_label())
     })?;
-    // Resolution lives play-side (src/shared/defaultEntrypoints.ts) — the
-    // single source shared with prod's embed.js — so new engine versions work
-    // here the moment play deploys, with no CLI update. An unresolvable
-    // version 404s when the shell loads the script; the shell surfaces the
-    // resolver's message in the loading gate (shell.html onerror).
+    // Resolution lives play-side (shared with prod's embed.js), so new engine
+    // versions work the moment play deploys. Unresolvable versions 404 when
+    // the shell loads the script and the gate shows the resolver's message.
     let entrypoint_url = format!(
         "{}/default-entrypoint.js?engine={}&engineVersion={}",
         config::get("play_statics_origin")?,
@@ -224,8 +214,7 @@ async fn resolve_engine_entry(
             let html = std::fs::read_to_string(&html_path)?;
             fetch_entrypoint_params(&html, kind, version, api_host, client).await?
         }
-        // Executable-style engines: params come straight from wavedash.toml,
-        // same values `wavedash push` sends.
+        // Params come straight from wavedash.toml, same as `wavedash push`.
         _ => wavedash_config.executable_entrypoint_params().ok_or_else(|| {
             anyhow::anyhow!("Missing executable config in wavedash.toml for {}", kind.as_label())
         })?,
@@ -243,8 +232,8 @@ struct EntrypointParamsResponse {
     entrypoint_params: serde_json::Value,
 }
 
-/// POST the exported HTML to the backend's parser (`/cli/entrypoint-params`),
-/// which extracts the engine boot config exactly as prod's upload flow does.
+/// POST the exported HTML to `/cli/entrypoint-params` — the same engine boot
+/// config extraction prod's upload flow runs.
 async fn fetch_entrypoint_params(
     html: &str,
     kind: EngineKind,
