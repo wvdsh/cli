@@ -118,7 +118,7 @@ fn find_available_port() -> Result<u16> {
     Ok(listener.local_addr()?.port())
 }
 
-fn generate_state() -> String {
+pub(crate) fn generate_state() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

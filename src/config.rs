@@ -16,8 +16,10 @@ pub fn wavedash_dir() -> Result<PathBuf> {
 #[derive(Deserialize)]
 struct Config {
     open_browser_website_host: String,
-    playsite_host: String,
     api_host: String,
+    /// Play worker statics origin (PLAY_STATICS_HOST) — serves the
+    /// default-entrypoint scripts `wavedash dev` boots engine builds with.
+    play_statics_origin: String,
     cf_access_client_id: Option<String>,
     cf_access_client_secret: Option<String>,
 }
@@ -32,10 +34,15 @@ impl Config {
             site_host = format!("https://{}", site_host);
         }
 
+        let mut play_statics_origin = env!("PLAY_STATICS_HOST").to_string();
+        if !play_statics_origin.starts_with("http") {
+            play_statics_origin = format!("https://{}", play_statics_origin);
+        }
+
         Ok(Config {
             open_browser_website_host: site_host,
-            playsite_host: env!("PLAYSITE_HOST").to_string(),
             api_host: env!("CONVEX_HTTP_URL").to_string(),
+            play_statics_origin,
             cf_access_client_id: option_env!("CF_ACCESS_CLIENT_ID").map(|s| s.to_string()),
             cf_access_client_secret: option_env!("CF_ACCESS_CLIENT_SECRET").map(|s| s.to_string()),
         })
@@ -46,8 +53,8 @@ pub fn get(key: &str) -> Result<String> {
     let config = Config::load()?;
     match key {
         "open_browser_website_host" => Ok(config.open_browser_website_host),
-        "playsite_host" => Ok(config.playsite_host),
         "api_host" => Ok(config.api_host),
+        "play_statics_origin" => Ok(config.play_statics_origin),
         _ => anyhow::bail!("Unknown config key: {}", key),
     }
 }
