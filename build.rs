@@ -3,7 +3,7 @@ fn main() {
     let _ = dotenvy::dotenv();
 
     // Required config vars - must be set either by Doppler or .env
-    let required = ["SITE_HOST", "CONVEX_HTTP_URL", "PLAY_STATICS_HOST"];
+    let required = ["SITE_HOST", "CONVEX_HTTP_URL", "PLAYSITE_HOST"];
 
     for var in required {
         let value = std::env::var(var)
@@ -34,7 +34,7 @@ fn main() {
     println!("cargo:rerun-if-changed=.env");
     println!("cargo:rerun-if-env-changed=SITE_HOST");
     println!("cargo:rerun-if-env-changed=CONVEX_HTTP_URL");
-    println!("cargo:rerun-if-env-changed=PLAY_STATICS_HOST");
+    println!("cargo:rerun-if-env-changed=PLAYSITE_HOST");
     println!("cargo:rerun-if-env-changed=CF_ACCESS_CLIENT_ID");
     println!("cargo:rerun-if-env-changed=CF_ACCESS_CLIENT_SECRET");
 }

@@ -199,7 +199,7 @@ async fn resolve_engine_entry(
     // the shell loads the script and the gate shows the resolver's message.
     let entrypoint_url = format!(
         "{}/default-entrypoint.js?engine={}&engineVersion={}",
-        config::get("play_statics_origin")?,
+        config::get("playsite_host")?,
         urlencoding::encode(kind.as_label()),
         urlencoding::encode(version)
     );
