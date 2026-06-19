@@ -163,7 +163,6 @@ impl R2Uploader {
 
         let progress = Arc::new(ProgressReporter::new(total_bytes));
         let uploaded_bytes = Arc::new(AtomicU64::new(0));
-        let total_bytes = total_bytes;
         let operator = self.operator.clone();
         let concurrency = self.concurrency.max(1);
 
