@@ -34,14 +34,19 @@ struct TempCredsResponse {
     expires_in: u64,
 }
 
-async fn get_temp_credentials(
-    game_id: &str,
-    engine: Option<&str>,
-    engine_version: Option<&str>,
-    entrypoint: Option<&str>,
+/// Build metadata sent with the R2 credential request.
+struct BuildUploadInfo<'a> {
+    game_id: &'a str,
+    engine: Option<&'a str>,
+    engine_version: Option<&'a str>,
+    entrypoint: Option<&'a str>,
     entrypoint_params: Option<serde_json::Value>,
-    message: Option<&str>,
+    message: Option<&'a str>,
     build_size_bytes: u64,
+}
+
+async fn get_temp_credentials(
+    info: BuildUploadInfo<'_>,
     api_key: &str,
 ) -> Result<TempCredsResponse> {
     let client = config::create_http_client()?;
@@ -49,32 +54,32 @@ async fn get_temp_credentials(
 
     let url = format!(
         "{}/api/games/{}/builds/create-temp-r2-creds",
-        api_host, game_id
+        api_host, info.game_id
     );
 
     let mut request_body = serde_json::json!({
-        "buildSizeBytes": build_size_bytes,
+        "buildSizeBytes": info.build_size_bytes,
     });
 
-    if let Some(eng) = engine {
+    if let Some(eng) = info.engine {
         request_body["engine"] = serde_json::json!(eng);
     }
 
-    if let Some(ver) = engine_version {
+    if let Some(ver) = info.engine_version {
         request_body["engineVersion"] = serde_json::json!(ver);
     }
 
-    if let Some(ep) = entrypoint {
+    if let Some(ep) = info.entrypoint {
         request_body["entrypoint"] = serde_json::json!(ep);
     }
 
     // Add entrypointParams if provided (for JSDOS/Ruffle/Ren'Py)
-    if let Some(ep_params) = entrypoint_params {
+    if let Some(ep_params) = info.entrypoint_params {
         request_body["entrypointParams"] = ep_params;
     }
 
     // Add build message if provided
-    if let Some(msg) = message {
+    if let Some(msg) = info.message {
         request_body["buildMessage"] = serde_json::json!(msg);
     }
 
@@ -160,13 +165,15 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
     // Get temporary R2 credentials (includes build size)
     let engine_kind = wavedash_config.engine_type()?;
     let creds = get_temp_credentials(
-        &wavedash_config.game_id,
-        engine_kind.map(|e| e.as_label()),
-        wavedash_config.engine_version(),
-        wavedash_config.entrypoint(),
-        wavedash_config.executable_entrypoint_params(),
-        message.as_deref(),
-        total_bytes,
+        BuildUploadInfo {
+            game_id: &wavedash_config.game_id,
+            engine: engine_kind.map(|e| e.as_label()),
+            engine_version: wavedash_config.engine_version(),
+            entrypoint: wavedash_config.entrypoint(),
+            entrypoint_params: wavedash_config.executable_entrypoint_params(),
+            message: message.as_deref(),
+            build_size_bytes: total_bytes,
+        },
         &api_key,
     )
     .await?;

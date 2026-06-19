@@ -43,6 +43,10 @@ pub struct ServeConfig {
     /// Cookies are host-scoped, so names carry the build uuid to keep
     /// concurrent and successive dev servers from clobbering each other.
     pub build_uuid: String,
+    /// Dev-session lock registry (`<uuid>.lock` per running server). The cookie
+    /// sweep consults it to expire only orphaned builds' cookies, never a live
+    /// concurrent server's — see `stale_wavedash_cookies`.
+    pub sessions_dir: PathBuf,
     /// Echoed back on the auth callback; must match or the handoff is rejected.
     pub state_token: String,
     /// Mainsite /auth/dev URL that `/` bounces credential-less browsers to.
@@ -174,6 +178,7 @@ struct ExchangeResponse {
 /// so no long-lived credential rides in a URL.
 async fn handle_callback(
     State(cfg): State<Arc<ServeConfig>>,
+    headers: HeaderMap,
     Query(p): Query<CallbackParams>,
 ) -> Response {
     if p.state != cfg.state_token {
@@ -211,36 +216,117 @@ async fn handle_callback(
         }
     };
 
-    Response::builder()
+    let mut builder = Response::builder()
         .status(StatusCode::SEE_OTHER)
         .header(header::LOCATION, "/")
-        .header(
-            header::SET_COOKIE,
-            format!(
-                "{}={}; Path=/; HttpOnly; SameSite=Lax",
-                cfg.session_cookie_name(),
-                exchange.session_token
-            ),
-        )
-        .header(
-            header::SET_COOKIE,
-            format!(
-                "{}={}; Path=/; HttpOnly; SameSite=Lax",
-                cfg.jwt_cookie_name(),
-                exchange.gameplay_jwt
-            ),
-        )
-        .header(
-            header::SET_COOKIE,
-            format!(
-                "{}={}; Path=/; HttpOnly; SameSite=Lax",
-                cfg.sdkconfig_cookie_name(),
-                urlencoding::encode(&p.sdkconfig)
-            ),
-        )
         .header(header::CACHE_CONTROL, "no-store")
-        .body(Body::empty())
-        .unwrap()
+        .header(
+            header::SET_COOKIE,
+            set_cookie(&cfg.session_cookie_name(), &exchange.session_token),
+        )
+        .header(
+            header::SET_COOKIE,
+            set_cookie(&cfg.jwt_cookie_name(), &exchange.gameplay_jwt),
+        )
+        .header(
+            header::SET_COOKIE,
+            set_cookie(
+                &cfg.sdkconfig_cookie_name(),
+                urlencoding::encode(&p.sdkconfig).as_ref(),
+            ),
+        );
+
+    // Each dev run mints a fresh build uuid, so its cookies carry new names;
+    // host-scoped, they replay to every localhost server (any port) and never
+    // self-clear, growing until they overflow some localhost app's request
+    // headers. Expire leftovers from builds whose server has exited here — the
+    // one request that sees them all — while leaving live concurrent servers'
+    // cookies untouched (see stale_wavedash_cookies).
+    for stale in stale_wavedash_cookies(&headers, &cfg) {
+        builder = builder.header(header::SET_COOKIE, expire_cookie(&stale));
+    }
+    builder.body(Body::empty()).unwrap()
+}
+
+/// 1-day gameplay session lifetime, carried as Max-Age so a build orphaned by
+/// a killed server (no later handoff ever sweeps it) still expires on its own
+/// rather than lingering as a session cookie that survives browser restores.
+const SESSION_MAX_AGE_SECS: u64 = 86_400;
+
+/// A wavedash cookie set for this build's 1-day session.
+fn set_cookie(name: &str, value: &str) -> String {
+    format!("{name}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_MAX_AGE_SECS}")
+}
+
+/// The deletion form (empty value, immediate expiry) of `set_cookie`; Path and
+/// attributes must match for the browser to drop it.
+fn expire_cookie(name: &str) -> String {
+    format!("{name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
+}
+
+/// Prefixes of the three cookies each dev build issues, suffixed by its uuid.
+const COOKIE_PREFIXES: [&str; 3] = ["wd_session_", "wd_jwt_", "wd_sdkconfig_"];
+
+/// Names of prior dev builds' wavedash cookies that are safe to expire: any
+/// `wd_*_<uuid>` cookie the browser is replaying whose build server is no
+/// longer running. A *live* concurrent server's cookies are kept — host-scoped
+/// cookies are shared across localhost ports, so a sibling server's cookies
+/// sit in this same jar and must survive. Live vs. orphan is decided by the
+/// build's session lock (`<uuid>.lock`), which its server holds for as long as
+/// it runs; a lock we can take means that server has exited.
+fn stale_wavedash_cookies(headers: &HeaderMap, cfg: &ServeConfig) -> Vec<String> {
+    let current = [
+        cfg.session_cookie_name(),
+        cfg.jwt_cookie_name(),
+        cfg.sdkconfig_cookie_name(),
+    ];
+    let Some(raw) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) else {
+        return Vec::new();
+    };
+
+    // Cache liveness per uuid — a build has three cookies, but one lock probe.
+    let mut liveness: std::collections::HashMap<&str, bool> = std::collections::HashMap::new();
+    let mut stale = Vec::new();
+    for pair in raw.split(';') {
+        let Some((name, _)) = pair.trim().split_once('=') else {
+            continue;
+        };
+        let name = name.trim();
+        let Some(uuid) = COOKIE_PREFIXES.iter().find_map(|p| name.strip_prefix(p)) else {
+            continue;
+        };
+        if current.iter().any(|c| c.as_str() == name) {
+            continue;
+        }
+        let live = *liveness
+            .entry(uuid)
+            .or_insert_with(|| build_is_live(&cfg.sessions_dir, uuid));
+        if !live {
+            stale.push(name.to_string());
+        }
+    }
+    stale
+}
+
+/// Whether the dev server for `uuid` is still running, per its session lock.
+/// A missing lockfile, or one we can lock, means the owner has exited (locks
+/// release on process death, crashes included) — so we drop the dead lockfile
+/// while we're here. `WouldBlock` means a live server holds it; any other lock
+/// error is treated as live, so we never sweep a build we can't prove is gone.
+fn build_is_live(sessions_dir: &Path, uuid: &str) -> bool {
+    let path = sessions_dir.join(format!("{uuid}.lock"));
+    let Ok(file) = std::fs::OpenOptions::new().read(true).open(&path) else {
+        return false;
+    };
+    match file.try_lock() {
+        Ok(()) => {
+            drop(file); // release the lock + close the handle before removing
+            let _ = std::fs::remove_file(&path);
+            false
+        }
+        Err(std::fs::TryLockError::WouldBlock) => true,
+        Err(std::fs::TryLockError::Error(_)) => true,
+    }
 }
 
 #[derive(Deserialize)]
@@ -281,11 +367,7 @@ async fn handle_auth_refresh(State(cfg): State<Arc<ServeConfig>>, headers: Heade
                 .header(header::CACHE_CONTROL, "no-store")
                 .header(
                     header::SET_COOKIE,
-                    format!(
-                        "{}={}; Path=/; HttpOnly; SameSite=Lax",
-                        cfg.jwt_cookie_name(),
-                        body.gameplay_jwt
-                    ),
+                    set_cookie(&cfg.jwt_cookie_name(), &body.gameplay_jwt),
                 )
                 .body(Body::from(body.gameplay_jwt))
                 .unwrap(),
@@ -298,18 +380,9 @@ async fn handle_auth_refresh(State(cfg): State<Arc<ServeConfig>>, headers: Heade
             .header(header::CACHE_CONTROL, "no-store")
             .header(
                 header::SET_COOKIE,
-                format!(
-                    "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
-                    cfg.session_cookie_name()
-                ),
+                expire_cookie(&cfg.session_cookie_name()),
             )
-            .header(
-                header::SET_COOKIE,
-                format!(
-                    "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
-                    cfg.jwt_cookie_name()
-                ),
-            )
+            .header(header::SET_COOKIE, expire_cookie(&cfg.jwt_cookie_name()))
             .body(Body::from("Session expired"))
             .unwrap(),
         Err(err) => {

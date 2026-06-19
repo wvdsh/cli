@@ -141,6 +141,24 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
     let port = listener.local_addr()?.port();
     let state_token = generate_state();
 
+    // Per-build session lock: a sibling/successor server's cookie sweep treats
+    // this build as live only while the lock is held, so hold it for the whole
+    // process. The OS releases it on exit (clean or crash) — exactly when this
+    // build's leftover cookies become safe for another server to expire.
+    let sessions_dir = config::wavedash_dir()?.join("dev-sessions");
+    std::fs::create_dir_all(&sessions_dir)?;
+    let lock_path = sessions_dir.join(format!("{}.lock", local_build.uuid));
+    let _session_lock = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| format!("Failed to open dev session lock: {}", lock_path.display()))?;
+    _session_lock
+        .try_lock()
+        .map_err(|e| anyhow::anyhow!("Failed to acquire dev session lock: {e}"))?;
+
     let site_host = config::get("open_browser_website_host")?;
     let callback_uri = format!("http://localhost:{}/__wavedash/callback", port);
     let auth_url = format!(
@@ -169,6 +187,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
             entry,
             verbose,
             build_uuid: local_build.uuid,
+            sessions_dir,
             state_token,
             auth_url,
             api_key,
