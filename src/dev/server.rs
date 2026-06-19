@@ -174,6 +174,7 @@ struct ExchangeResponse {
 /// so no long-lived credential rides in a URL.
 async fn handle_callback(
     State(cfg): State<Arc<ServeConfig>>,
+    headers: HeaderMap,
     Query(p): Query<CallbackParams>,
 ) -> Response {
     if p.state != cfg.state_token {
@@ -211,36 +212,73 @@ async fn handle_callback(
         }
     };
 
-    Response::builder()
+    let mut builder = Response::builder()
         .status(StatusCode::SEE_OTHER)
         .header(header::LOCATION, "/")
-        .header(
-            header::SET_COOKIE,
-            format!(
-                "{}={}; Path=/; HttpOnly; SameSite=Lax",
-                cfg.session_cookie_name(),
-                exchange.session_token
-            ),
-        )
-        .header(
-            header::SET_COOKIE,
-            format!(
-                "{}={}; Path=/; HttpOnly; SameSite=Lax",
-                cfg.jwt_cookie_name(),
-                exchange.gameplay_jwt
-            ),
-        )
-        .header(
-            header::SET_COOKIE,
-            format!(
-                "{}={}; Path=/; HttpOnly; SameSite=Lax",
-                cfg.sdkconfig_cookie_name(),
-                urlencoding::encode(&p.sdkconfig)
-            ),
-        )
         .header(header::CACHE_CONTROL, "no-store")
-        .body(Body::empty())
-        .unwrap()
+        .header(
+            header::SET_COOKIE,
+            set_cookie(&cfg.session_cookie_name(), &exchange.session_token),
+        )
+        .header(
+            header::SET_COOKIE,
+            set_cookie(&cfg.jwt_cookie_name(), &exchange.gameplay_jwt),
+        )
+        .header(
+            header::SET_COOKIE,
+            set_cookie(
+                &cfg.sdkconfig_cookie_name(),
+                urlencoding::encode(&p.sdkconfig).as_ref(),
+            ),
+        );
+
+    // Each dev run mints a fresh build uuid, so its cookies carry new names;
+    // host-scoped, they replay to every localhost server (any port) and never
+    // self-clear. Expire prior builds' leftovers here — the one request that
+    // sees them all — so the jar stays at this build's three cookies instead
+    // of growing until it overflows some localhost app's request headers.
+    for stale in stale_wavedash_cookies(&headers, &cfg) {
+        builder = builder.header(header::SET_COOKIE, expire_cookie(&stale));
+    }
+    builder.body(Body::empty()).unwrap()
+}
+
+/// 1-day gameplay session lifetime, carried as Max-Age so a build orphaned by
+/// a killed server (no later handoff ever sweeps it) still expires on its own
+/// rather than lingering as a session cookie that survives browser restores.
+const SESSION_MAX_AGE_SECS: u64 = 86_400;
+
+/// A wavedash cookie set for this build's 1-day session.
+fn set_cookie(name: &str, value: &str) -> String {
+    format!("{name}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_MAX_AGE_SECS}")
+}
+
+/// The deletion form (empty value, immediate expiry) of `set_cookie`; Path and
+/// attributes must match for the browser to drop it.
+fn expire_cookie(name: &str) -> String {
+    format!("{name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
+}
+
+/// Names of prior dev builds' wavedash cookies the browser is still replaying:
+/// anything with a `wd_*_<uuid>` prefix that isn't one of this build's three.
+fn stale_wavedash_cookies(headers: &HeaderMap, cfg: &ServeConfig) -> Vec<String> {
+    const PREFIXES: [&str; 3] = ["wd_session_", "wd_jwt_", "wd_sdkconfig_"];
+    let current = [
+        cfg.session_cookie_name(),
+        cfg.jwt_cookie_name(),
+        cfg.sdkconfig_cookie_name(),
+    ];
+    let Some(raw) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) else {
+        return Vec::new();
+    };
+    raw.split(';')
+        .filter_map(|pair| pair.trim().split_once('=').map(|(name, _)| name.trim()))
+        .filter(|&name| {
+            PREFIXES.iter().any(|p| name.starts_with(p))
+                && !current.iter().any(|c| c.as_str() == name)
+        })
+        .map(str::to_string)
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -281,11 +319,7 @@ async fn handle_auth_refresh(State(cfg): State<Arc<ServeConfig>>, headers: Heade
                 .header(header::CACHE_CONTROL, "no-store")
                 .header(
                     header::SET_COOKIE,
-                    format!(
-                        "{}={}; Path=/; HttpOnly; SameSite=Lax",
-                        cfg.jwt_cookie_name(),
-                        body.gameplay_jwt
-                    ),
+                    set_cookie(&cfg.jwt_cookie_name(), &body.gameplay_jwt),
                 )
                 .body(Body::from(body.gameplay_jwt))
                 .unwrap(),
@@ -298,18 +332,9 @@ async fn handle_auth_refresh(State(cfg): State<Arc<ServeConfig>>, headers: Heade
             .header(header::CACHE_CONTROL, "no-store")
             .header(
                 header::SET_COOKIE,
-                format!(
-                    "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
-                    cfg.session_cookie_name()
-                ),
+                expire_cookie(&cfg.session_cookie_name()),
             )
-            .header(
-                header::SET_COOKIE,
-                format!(
-                    "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
-                    cfg.jwt_cookie_name()
-                ),
-            )
+            .header(header::SET_COOKIE, expire_cookie(&cfg.jwt_cookie_name()))
             .body(Body::from("Session expired"))
             .unwrap(),
         Err(err) => {
