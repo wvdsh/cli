@@ -35,6 +35,15 @@ fn mask_token(token: &str) -> String {
     }
 }
 
+fn parse_non_empty_arg(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        Err("value cannot be empty".to_string())
+    } else {
+        Ok(trimmed.to_string())
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "wavedash")]
 #[command(about = "Cross-platform CLI tool for uploading game projects to wavedash.com")]
@@ -68,7 +77,11 @@ enum Commands {
     },
     #[command(about = "Publish an uploaded build to wavedash.com")]
     Publish {
-        #[arg(long = "build-id", help = "Build ID returned by `wavedash build push`")]
+        #[arg(
+            long = "build-id",
+            help = "Build ID returned by `wavedash build push`",
+            value_parser = parse_non_empty_arg
+        )]
         build_id: String,
         #[arg(
             short = 'c',
