@@ -75,10 +75,12 @@ enum Commands {
         )]
         config: Option<PathBuf>,
     },
-    #[command(about = "Publish an uploaded build to wavedash.com")]
+    #[command(
+        about = "Publish an uploaded build to wavedash.com",
+        override_usage = "wavedash publish <BUILD_ID> [OPTIONS]"
+    )]
     Publish {
         #[arg(
-            long = "build-id",
             help = "Build ID returned by `wavedash build push`",
             value_parser = parse_non_empty_arg
         )]
