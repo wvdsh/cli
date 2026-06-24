@@ -61,15 +61,22 @@ fn append_changes(changes: &mut Vec<ReleaseChange>, kind: &'static str, items: V
     );
 }
 
-fn build_release_notes(args: &PublishArgs) -> Option<ReleaseNotes> {
-    let title = trim_optional(args.title.clone());
-    let summary = trim_optional(args.summary.clone());
+fn build_release_notes(
+    title: Option<String>,
+    summary: Option<String>,
+    added: Vec<String>,
+    removed: Vec<String>,
+    fixed: Vec<String>,
+    adjusted: Vec<String>,
+) -> Option<ReleaseNotes> {
+    let title = trim_optional(title);
+    let summary = trim_optional(summary);
 
     let mut changes = Vec::new();
-    append_changes(&mut changes, "added", args.added.clone());
-    append_changes(&mut changes, "removed", args.removed.clone());
-    append_changes(&mut changes, "fixed", args.fixed.clone());
-    append_changes(&mut changes, "adjusted", args.adjusted.clone());
+    append_changes(&mut changes, "added", added);
+    append_changes(&mut changes, "removed", removed);
+    append_changes(&mut changes, "fixed", fixed);
+    append_changes(&mut changes, "adjusted", adjusted);
 
     let changes = if changes.is_empty() {
         None
@@ -89,7 +96,18 @@ fn build_release_notes(args: &PublishArgs) -> Option<ReleaseNotes> {
 }
 
 pub async fn handle_publish(args: PublishArgs) -> Result<()> {
-    let wavedash_config = WavedashConfig::load(&args.config_path)?;
+    let PublishArgs {
+        config_path,
+        build_id,
+        title,
+        summary,
+        added,
+        removed,
+        fixed,
+        adjusted,
+    } = args;
+
+    let wavedash_config = WavedashConfig::load(&config_path)?;
 
     let auth_manager = AuthManager::new()?;
     let api_key = auth_manager
@@ -100,16 +118,16 @@ pub async fn handle_publish(args: PublishArgs) -> Result<()> {
     let api_host = config::get("api_host")?;
     let url = format!(
         "{}/api/games/{}/builds/{}/publish",
-        api_host, wavedash_config.game_id, args.build_id
+        api_host, wavedash_config.game_id, build_id
     );
+
+    let notes = build_release_notes(title, summary, added, removed, fixed, adjusted);
 
     let response = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
-        .json(&PublishRequest {
-            notes: build_release_notes(&args),
-        })
+        .json(&PublishRequest { notes })
         .send()
         .await?;
 
@@ -117,7 +135,7 @@ pub async fn handle_publish(args: PublishArgs) -> Result<()> {
     let result: PublishResponse = response.json().await?;
 
     let site_host = config::get("open_browser_website_host")?;
-    println!("✓ Published build {}", args.build_id);
+    println!("✓ Published build {}", build_id);
     println!("Release ID: {}", result.release_id);
     println!("View at: {}/games/{}", site_host, result.game_slug);
 
