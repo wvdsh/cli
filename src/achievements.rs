@@ -1,11 +1,11 @@
 use crate::auth::{AuthManager, AuthSource};
 use crate::config;
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::Path;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Achievement {
     _id: String,
     identifier: String,
@@ -35,12 +35,7 @@ async fn upload_achievement_image(
         .extension()
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Image file has no extension: {}",
-                image_path.display()
-            )
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("Image file has no extension: {}", image_path.display()))?;
 
     let bytes = std::fs::read(image_path)
         .with_context(|| format!("Failed to read image file: {}", image_path.display()))?;
@@ -66,11 +61,7 @@ async fn upload_achievement_image(
     let presigned: ImageUploadUrlResponse = resp.json().await?;
 
     // 2. PUT the bytes directly to R2. UI doesn't set Content-Type either.
-    let put_resp = client
-        .put(&presigned.upload_url)
-        .body(bytes)
-        .send()
-        .await?;
+    let put_resp = client.put(&presigned.upload_url).body(bytes).send().await?;
     if !put_resp.status().is_success() {
         let status = put_resp.status();
         let body = put_resp.text().await.unwrap_or_default();
@@ -100,6 +91,7 @@ pub struct CreateAchievementArgs<'a> {
     pub triggered_by_stat_id: Option<&'a str>,
     pub stat_threshold: Option<f64>,
     pub image_path: Option<&'a Path>,
+    pub json: bool,
 }
 
 pub async fn handle_achievement_create(args: CreateAchievementArgs<'_>) -> Result<()> {
@@ -145,6 +137,10 @@ pub async fn handle_achievement_create(args: CreateAchievementArgs<'_>) -> Resul
 
     let resp = config::check_api_response(resp).await?;
     let achievement: Achievement = resp.json().await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&achievement)?);
+        return Ok(());
+    }
     println!(
         "✓ Created achievement \"{}\" (id: {}, identifier: {})",
         achievement.display_name, achievement._id, achievement.identifier
@@ -164,6 +160,25 @@ pub struct UpdateAchievementArgs<'a> {
     pub triggered_by_stat_id: Option<Option<&'a str>>,
     pub stat_threshold: Option<f64>,
     pub image_path: Option<&'a Path>,
+    pub json: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateOutput<'a> {
+    success: bool,
+    #[serde(rename = "gameId")]
+    game_id: &'a str,
+    #[serde(rename = "achievementId")]
+    achievement_id: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct DeleteOutput<'a> {
+    success: bool,
+    #[serde(rename = "gameId")]
+    game_id: &'a str,
+    #[serde(rename = "achievementId")]
+    achievement_id: &'a str,
 }
 
 pub async fn handle_achievement_update(args: UpdateAchievementArgs<'_>) -> Result<()> {
@@ -231,6 +246,17 @@ pub async fn handle_achievement_update(args: UpdateAchievementArgs<'_>) -> Resul
         .await?;
 
     config::check_api_response(resp).await?;
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&UpdateOutput {
+                success: true,
+                game_id: args.game_id,
+                achievement_id: args.achievement_id,
+            })?
+        );
+        return Ok(());
+    }
     println!("✓ Updated achievement {}", args.achievement_id);
     Ok(())
 }
@@ -239,6 +265,7 @@ pub async fn handle_achievement_delete(
     game_id: &str,
     achievement_id: &str,
     force: bool,
+    json_output: bool,
 ) -> Result<()> {
     let api_key = require_api_key()?;
     let client = config::create_http_client()?;
@@ -255,6 +282,17 @@ pub async fn handle_achievement_delete(
         .await?;
 
     config::check_api_response(resp).await?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&DeleteOutput {
+                success: true,
+                game_id,
+                achievement_id,
+            })?
+        );
+        return Ok(());
+    }
     println!("✓ Deleted achievement {}", achievement_id);
     Ok(())
 }

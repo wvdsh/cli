@@ -1,6 +1,7 @@
 use crate::auth::{AuthManager, AuthSource};
 use crate::config;
 use anyhow::Result;
+use clap::ValueEnum;
 use comfy_table::modifiers::UTF8_ROUND_CORNERS;
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, ContentArrangement, Table};
@@ -33,6 +34,53 @@ struct GamesResponse {
     games: Vec<Game>,
 }
 
+#[derive(Debug, Serialize)]
+struct TeamCreateOutput {
+    team: Organization,
+    url: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectCreateOutput {
+    project: Game,
+    team: Organization,
+    url: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum InitEngine {
+    Auto,
+    Custom,
+    Godot,
+    Unity,
+}
+
+pub struct InitArgs {
+    pub team_id: Option<String>,
+    pub team_name: Option<String>,
+    pub game_id: Option<String>,
+    pub game_title: Option<String>,
+    pub upload_dir: Option<String>,
+    pub engine: Option<InitEngine>,
+    pub engine_version: Option<String>,
+    pub force: bool,
+    pub json: bool,
+}
+
+impl InitArgs {
+    pub fn is_interactive(&self) -> bool {
+        self.team_id.is_none()
+            && self.team_name.is_none()
+            && self.game_id.is_none()
+            && self.game_title.is_none()
+            && self.upload_dir.is_none()
+            && self.engine.is_none()
+            && self.engine_version.is_none()
+            && !self.force
+            && !self.json
+    }
+}
+
 // ── Engine detection ─────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +96,14 @@ impl EngineType {
             EngineType::Godot => "build",
             EngineType::Unity => "build",
             EngineType::Custom => "dist",
+        }
+    }
+
+    fn as_json_label(&self) -> &'static str {
+        match self {
+            EngineType::Godot => "godot",
+            EngineType::Unity => "unity",
+            EngineType::Custom => "custom",
         }
     }
 }
@@ -245,6 +301,147 @@ fn generate_toml(
 
 const CREATE_NEW_SENTINEL: &str = "__create_new__";
 
+#[derive(Debug, Serialize)]
+struct InitOutput {
+    #[serde(rename = "configPath")]
+    config_path: String,
+    team: Organization,
+    game: Game,
+    #[serde(rename = "uploadDir")]
+    upload_dir: String,
+    engine: &'static str,
+    #[serde(rename = "engineVersion", skip_serializing_if = "Option::is_none")]
+    engine_version: Option<String>,
+    url: String,
+}
+
+fn resolve_init_engine(engine: Option<InitEngine>, detected: &DetectedEngine) -> EngineType {
+    match engine.unwrap_or(InitEngine::Auto) {
+        InitEngine::Auto => detected.engine_type.clone(),
+        InitEngine::Custom => EngineType::Custom,
+        InitEngine::Godot => EngineType::Godot,
+        InitEngine::Unity => EngineType::Unity,
+    }
+}
+
+fn resolve_init_engine_version(
+    engine_type: &EngineType,
+    detected: &DetectedEngine,
+    engine_version: Option<String>,
+) -> Option<String> {
+    match engine_type {
+        EngineType::Godot => engine_version
+            .or_else(|| detected.version_hint.clone())
+            .or_else(|| Some("4.0".to_string())),
+        EngineType::Unity => engine_version
+            .or_else(|| detected.version_hint.clone())
+            .or_else(|| Some("2022.3".to_string())),
+        EngineType::Custom => None,
+    }
+}
+
+fn validate_scripted_init_args(args: &InitArgs) -> Result<()> {
+    if args.team_id.is_none() && args.team_name.is_none() {
+        anyhow::bail!(
+            "Non-interactive init requires --team-id to use an existing team or --team-name to create one."
+        );
+    }
+    if args.game_id.is_none() && args.game_title.is_none() {
+        anyhow::bail!(
+            "Non-interactive init requires --game-id to use an existing game or --game-title to create one."
+        );
+    }
+    Ok(())
+}
+
+pub async fn handle_init_scripted(args: InitArgs) -> Result<()> {
+    validate_scripted_init_args(&args)?;
+
+    let config_path = PathBuf::from("wavedash.toml");
+    if config_path.exists() && !args.force {
+        anyhow::bail!("wavedash.toml already exists. Pass --force to overwrite it.");
+    }
+
+    let auth_manager = AuthManager::new()?;
+    let auth_info = auth_manager.get_auth_info();
+    let api_key = match auth_info.source {
+        AuthSource::None => anyhow::bail!(
+            "Not authenticated. Set WAVEDASH_TOKEN or run `wavedash auth login` first."
+        ),
+        _ => auth_info.api_key.unwrap(),
+    };
+
+    let current_dir = std::env::current_dir()?;
+    let detected = detect_engine(&current_dir);
+    let engine_type = resolve_init_engine(args.engine, &detected);
+    let provided_engine_version = args.engine_version.is_some();
+    let engine_version =
+        resolve_init_engine_version(&engine_type, &detected, args.engine_version);
+    if provided_engine_version && matches!(engine_type, EngineType::Custom) {
+        anyhow::bail!("--engine-version is only valid for Godot or Unity configs.");
+    }
+    let upload_dir = args
+        .upload_dir
+        .unwrap_or_else(|| engine_type.default_upload_dir().to_string());
+
+    let selected_org = if let Some(team_name) = args.team_name {
+        create_organization(&api_key, &team_name).await?
+    } else {
+        let team_id = args.team_id.as_deref().expect("validated team id");
+        fetch_organizations(&api_key)
+            .await?
+            .into_iter()
+            .find(|org| org._id == team_id)
+            .ok_or_else(|| anyhow::anyhow!("Team not found: {}", team_id))?
+    };
+
+    let selected_game = if let Some(game_title) = args.game_title {
+        create_game(&api_key, &selected_org._id, &game_title).await?
+    } else {
+        let game_id = args.game_id.as_deref().expect("validated game id");
+        fetch_games(&api_key, &selected_org._id)
+            .await?
+            .into_iter()
+            .find(|game| game._id == game_id)
+            .ok_or_else(|| anyhow::anyhow!("Game not found in selected team: {}", game_id))?
+    };
+
+    let toml_content = generate_toml(
+        &selected_game._id,
+        &upload_dir,
+        &engine_type,
+        engine_version.as_deref(),
+    );
+    std::fs::write(&config_path, &toml_content)?;
+
+    let website_host = config::get("open_browser_website_host")?;
+    let url = format!(
+        "{}/dev-portal/{}/{}",
+        website_host, selected_org.slug, selected_game.slug
+    );
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&InitOutput {
+                config_path: config_path.display().to_string(),
+                team: selected_org,
+                game: selected_game,
+                upload_dir,
+                engine: engine_type.as_json_label(),
+                engine_version,
+                url,
+            })?
+        );
+        return Ok(());
+    }
+
+    println!("✓ Created wavedash.toml");
+    println!("Game: {} ({})", selected_game.title, selected_game._id);
+    println!("Manage at: {}", url);
+    Ok(())
+}
+
 pub async fn handle_init() -> Result<()> {
     cliclack::intro("wavedash init")?;
 
@@ -253,9 +450,7 @@ pub async fn handle_init() -> Result<()> {
     let auth_info = auth_manager.get_auth_info();
     let api_key = match auth_info.source {
         AuthSource::None => {
-            cliclack::outro_cancel(
-                "Not authenticated. Run `wavedash auth login` first.",
-            )?;
+            cliclack::outro_cancel("Not authenticated. Run `wavedash auth login` first.")?;
             std::process::exit(1);
         }
         _ => auth_info.api_key.unwrap(),
@@ -264,10 +459,9 @@ pub async fn handle_init() -> Result<()> {
     // 2. Check for existing wavedash.toml
     let config_path = PathBuf::from("wavedash.toml");
     if config_path.exists() {
-        let overwrite: bool = cliclack::confirm(
-            "A wavedash.toml already exists. Do you want to reinitialize?",
-        )
-        .interact()?;
+        let overwrite: bool =
+            cliclack::confirm("A wavedash.toml already exists. Do you want to reinitialize?")
+                .interact()?;
 
         if !overwrite {
             cliclack::outro("Keeping existing configuration.")?;
@@ -455,16 +649,24 @@ fn require_api_key() -> Result<String> {
     }
 }
 
-pub async fn handle_team_create(name: &str) -> Result<()> {
+pub async fn handle_team_create(name: &str, json: bool) -> Result<()> {
     let api_key = require_api_key()?;
     let team = create_organization(&api_key, name).await?;
     let website_host = config::get("open_browser_website_host")?;
+    let url = format!("{}/dev-portal/{}", website_host, team.slug);
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&TeamCreateOutput { team, url })?
+        );
+        return Ok(());
+    }
     println!("✓ Created team \"{}\" (id: {})", team.name, team._id);
-    println!("  {}/dev-portal/{}", website_host, team.slug);
+    println!("  {}", url);
     Ok(())
 }
 
-pub async fn handle_project_create(title: &str, team_id: &str) -> Result<()> {
+pub async fn handle_project_create(title: &str, team_id: &str, json: bool) -> Result<()> {
     let api_key = require_api_key()?;
     let orgs = fetch_organizations(&api_key).await?;
     let team = orgs
@@ -473,14 +675,23 @@ pub async fn handle_project_create(title: &str, team_id: &str) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Team not found: {}", team_id))?;
     let project = create_game(&api_key, team_id, title).await?;
     let website_host = config::get("open_browser_website_host")?;
+    let url = format!("{}/dev-portal/{}/{}", website_host, team.slug, project.slug);
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&ProjectCreateOutput {
+                project,
+                team: team.clone(),
+                url,
+            })?
+        );
+        return Ok(());
+    }
     println!(
         "✓ Created project \"{}\" (id: {})",
         project.title, project._id
     );
-    println!(
-        "  {}/dev-portal/{}/{}",
-        website_host, team.slug, project.slug
-    );
+    println!("  {}", url);
     Ok(())
 }
 
@@ -524,11 +735,7 @@ pub async fn handle_project_list(team_id: &str, json: bool) -> Result<()> {
         .load_preset(UTF8_FULL)
         .apply_modifier(UTF8_ROUND_CORNERS)
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec![
-            Cell::new("ID"),
-            Cell::new("Slug"),
-            Cell::new("Title"),
-        ]);
+        .set_header(vec![Cell::new("ID"), Cell::new("Slug"), Cell::new("Title")]);
     for game in games {
         table.add_row(vec![game._id, game.slug, game.title]);
     }
