@@ -5,6 +5,7 @@ mod config;
 mod dev;
 mod file_staging;
 mod init;
+mod publish;
 mod stats;
 mod updater;
 
@@ -22,6 +23,7 @@ use dev::handle_dev;
 use init::{
     handle_init, handle_project_create, handle_project_list, handle_team_create, handle_team_list,
 };
+use publish::{handle_publish, PublishArgs};
 use stats::{handle_stat_create, handle_stat_delete, handle_stat_update};
 use std::path::PathBuf;
 
@@ -30,6 +32,15 @@ fn mask_token(token: &str) -> String {
         format!("{}...{}", &token[..6], &token[token.len() - 3..])
     } else {
         "***".to_string()
+    }
+}
+
+fn parse_non_empty_arg(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        Err("value cannot be empty".to_string())
+    } else {
+        Ok(trimmed.to_string())
     }
 }
 
@@ -63,6 +74,36 @@ enum Commands {
             help = "Path to wavedash.toml config file"
         )]
         config: Option<PathBuf>,
+    },
+    #[command(
+        about = "Publish an uploaded build to wavedash.com",
+        override_usage = "wavedash publish <BUILD_ID> [OPTIONS]"
+    )]
+    Publish {
+        #[arg(
+            help = "Build ID returned by `wavedash build push`",
+            value_parser = parse_non_empty_arg
+        )]
+        build_id: String,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(long, help = "Release title")]
+        title: Option<String>,
+        #[arg(long, help = "Release summary")]
+        summary: Option<String>,
+        #[arg(long, help = "Added change item", action = clap::ArgAction::Append, num_args = 1)]
+        added: Vec<String>,
+        #[arg(long, help = "Removed change item", action = clap::ArgAction::Append, num_args = 1)]
+        removed: Vec<String>,
+        #[arg(long, help = "Fixed change item", action = clap::ArgAction::Append, num_args = 1)]
+        fixed: Vec<String>,
+        #[arg(long, help = "Adjusted change item", action = clap::ArgAction::Append, num_args = 1)]
+        adjusted: Vec<String>,
     },
     Team {
         #[command(subcommand)]
@@ -391,6 +432,28 @@ async fn run() -> Result<()> {
         },
         Commands::Dev { config } => {
             handle_dev(config, cli.verbose).await?;
+        }
+        Commands::Publish {
+            config,
+            build_id,
+            title,
+            summary,
+            added,
+            removed,
+            fixed,
+            adjusted,
+        } => {
+            handle_publish(PublishArgs {
+                config_path: config,
+                build_id,
+                title,
+                summary,
+                added,
+                removed,
+                fixed,
+                adjusted,
+            })
+            .await?;
         }
         Commands::Team { action } => match action {
             TeamCommands::Create { name } => {

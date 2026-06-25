@@ -129,7 +129,11 @@ async fn notify_upload_complete(
     Ok(result)
 }
 
-pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Option<String>) -> Result<()> {
+pub async fn handle_build_push(
+    config_path: PathBuf,
+    verbose: bool,
+    message: Option<String>,
+) -> Result<()> {
     // Load wavedash.toml config
     let wavedash_config = WavedashConfig::load(&config_path)?;
 
@@ -198,11 +202,9 @@ pub async fn handle_build_push(config_path: PathBuf, verbose: bool, message: Opt
 
     // Print the play URL
     let site_host = config::get("open_browser_website_host")?;
-    let play_url = format!(
-        "{}/playtest/{}/{}",
-        site_host, result.game_slug, creds.uuid
-    );
-    println!("\n▶ Play at: {}", play_url);
+    let play_url = format!("{}/playtest/{}/{}", site_host, result.game_slug, creds.uuid);
+    println!("\nBuild ID: {}", creds.game_build_id);
+    println!("▶ Play at: {}", play_url);
 
     Ok(())
 }
