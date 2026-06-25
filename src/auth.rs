@@ -141,8 +141,10 @@ pub fn login_with_browser() -> Result<LoginResult> {
     );
 
     println!("Opening browser for authentication...");
-    println!("Auth URL: {}", auth_url);
-    open::that(&auth_url)?;
+    if open::that(&auth_url).is_err() {
+        eprintln!("Couldn't open a browser automatically.");
+        eprintln!("Open this URL to continue: {}", auth_url);
+    }
 
     let server = Server::http(format!("127.0.0.1:{}", port))
         .map_err(|e| anyhow::anyhow!("Failed to start server: {}", e))?;
