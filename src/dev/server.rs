@@ -335,18 +335,31 @@ struct RefreshResponse {
     gameplay_jwt: String,
 }
 
+#[derive(Deserialize)]
+struct RefreshParams {
+    fresh: Option<String>,
+}
+
 /// Exchange the browser's session cookie for a fresh gameplay JWT, so the
 /// SDK's refreshes renew for the session's day, not the first JWT's hour.
 /// The last JWT rides in a cookie and is served back while still fresh, so
 /// most refreshes never leave localhost.
-async fn handle_auth_refresh(State(cfg): State<Arc<ServeConfig>>, headers: HeaderMap) -> Response {
+async fn handle_auth_refresh(
+    State(cfg): State<Arc<ServeConfig>>,
+    Query(p): Query<RefreshParams>,
+    headers: HeaderMap,
+) -> Response {
     let Some(session_token) = cookie_value(&headers, &cfg.session_cookie_name()) else {
         return respond(StatusCode::UNAUTHORIZED, TEXT, None, "Auth not ready");
     };
 
-    if let Some(jwt) = cookie_value(&headers, &cfg.jwt_cookie_name()) {
-        if jwt_fresh(&cfg, &jwt).await {
-            return respond(StatusCode::OK, TEXT, None, jwt);
+    // `?fresh` follows a claims-changing event (e.g. a simulated purchase), so
+    // skip the cached JWT and re-mint from the backend.
+    if p.fresh.is_none() {
+        if let Some(jwt) = cookie_value(&headers, &cfg.jwt_cookie_name()) {
+            if jwt_fresh(&cfg, &jwt).await {
+                return respond(StatusCode::OK, TEXT, None, jwt);
+            }
         }
     }
 
