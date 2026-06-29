@@ -54,7 +54,7 @@ async fn create_local_build(
 
 const DEFAULT_CONFIG: &str = "./wavedash.toml";
 
-pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<()> {
+pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bool) -> Result<()> {
     let auth_manager = AuthManager::new()?;
     let api_key = auth_manager
         .get_api_key()
@@ -178,7 +178,11 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool) -> Result<(
         println!("    callback_uri: {}", callback_uri);
         println!("    state:        {}", state_token);
     }
-    open::that(&local_url)?;
+    if no_open {
+        println!("  --no-open set; open {} in your browser to start.", local_url);
+    } else {
+        open::that(&local_url)?;
+    }
 
     server::run(
         listener,

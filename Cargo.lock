@@ -3100,7 +3100,7 @@ dependencies = [
 
 [[package]]
 name = "wavedash"
-version = "0.1.87"
+version = "0.1.88"
 dependencies = [
  "anyhow",
  "axum",
