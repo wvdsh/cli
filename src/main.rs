@@ -8,6 +8,7 @@ mod init;
 mod publish;
 mod stats;
 mod updater;
+mod welcome;
 
 use achievements::{
     handle_achievement_create, handle_achievement_delete, handle_achievement_update,
@@ -52,7 +53,7 @@ struct Cli {
     #[arg(long, global = true, help = "Enable verbose output")]
     verbose: bool,
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -367,14 +368,27 @@ async fn main() {
 async fn run() -> Result<()> {
     let cli = Cli::parse();
 
+    // Bare `wavedash` (no subcommand) is the home screen: show the splash and
+    // point at --help.
+    let Some(command) = cli.command else {
+        welcome::show_home();
+        return Ok(());
+    };
+
+    // Greet on the very first interactive run (skip for `update`, which has its
+    // own focused output).
+    if !matches!(command, Commands::Update) {
+        welcome::show_first_run_if_needed();
+    }
+
     // Check for updates in background, but skip if the user is already running `update`
-    let update_handle = if matches!(cli.command, Commands::Update) {
+    let update_handle = if matches!(command, Commands::Update) {
         None
     } else {
         Some(updater::check_for_update())
     };
 
-    match cli.command {
+    match command {
         Commands::Init => {
             handle_init().await?;
         }
