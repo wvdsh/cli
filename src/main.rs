@@ -8,6 +8,7 @@ mod init;
 mod publish;
 mod stats;
 mod updater;
+mod welcome;
 
 use achievements::{
     handle_achievement_create, handle_achievement_delete, handle_achievement_update,
@@ -59,7 +60,7 @@ struct Cli {
     #[arg(long, global = true, help = "Disable colored output")]
     no_color: bool,
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -132,6 +133,11 @@ enum Commands {
             help = "Path to wavedash.toml config file"
         )]
         config: Option<PathBuf>,
+        #[arg(
+            long = "no-open",
+            help = "Don't automatically open the browser; just print the local URL"
+        )]
+        no_open: bool,
     },
     #[command(
         about = "Publish an uploaded build to wavedash.com",
@@ -561,10 +567,23 @@ async fn run() -> Result<()> {
         colored::control::set_override(false);
     }
 
+    // Bare `wavedash` (no subcommand) is the home screen: show the splash and
+    // point at --help.
+    let Some(command) = cli.command else {
+        welcome::show_home();
+        return Ok(());
+    };
+
+    // Greet on the very first interactive run (skip for `update`, which has its
+    // own focused output).
+    if !matches!(command, Commands::Update) {
+        welcome::show_first_run_if_needed();
+    }
+
     // Check for updates in background, but skip if the user is already running `update`
-    let update_handle = if matches!(cli.command, Commands::Update)
+    let update_handle = if matches!(command, Commands::Update)
         || cli.no_update_check
-        || command_outputs_json(&cli.command)
+        || command_outputs_json(&command)
         || env_flag_enabled("WAVEDASH_NO_UPDATE_CHECK")
     {
         None
@@ -572,7 +591,7 @@ async fn run() -> Result<()> {
         Some(updater::check_for_update())
     };
 
-    match cli.command {
+    match command {
         Commands::Init {
             team_id,
             team_name,
@@ -681,8 +700,8 @@ async fn run() -> Result<()> {
                 handle_build_push(config, cli.verbose, message, json).await?;
             }
         },
-        Commands::Dev { config } => {
-            handle_dev(config, cli.verbose).await?;
+        Commands::Dev { config, no_open } => {
+            handle_dev(config, cli.verbose, no_open).await?;
         }
         Commands::Publish {
             config,
