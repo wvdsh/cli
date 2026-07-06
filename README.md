@@ -8,8 +8,12 @@ For a local desktop session, sign in with the browser flow:
 wavedash auth login
 ```
 
-Browser login opens a local callback server and requires a desktop browser. In
-CI/CD or other headless environments, use a token instead:
+Browser login opens Wavedash in your browser and completes automatically when
+the browser can reach the CLI's local callback server. If the callback is
+unavailable, paste the one-time code from the browser into the CLI prompt.
+
+In CI/CD, create an API key at https://wavedash.com/dev-portal/keys and use it
+as a token instead:
 
 ```bash
 export WAVEDASH_TOKEN=wd_...

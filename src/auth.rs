@@ -1,9 +1,32 @@
 use crate::config;
-use anyhow::Result;
+use anyhow::{bail, Result};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use ring::{
+    digest,
+    rand::{SecureRandom, SystemRandom},
+};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
-use std::net::TcpListener;
-use tiny_http::{Header, Response, Server};
+use std::io::{self, BufRead, BufReader, IsTerminal, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::thread;
+use tokio::{signal, sync::mpsc};
+
+#[cfg(target_os = "macos")]
+const CLIPBOARD_COMMANDS: &[(&str, &[&str])] = &[("pbcopy", &[])];
+
+#[cfg(target_os = "windows")]
+const CLIPBOARD_COMMANDS: &[(&str, &[&str])] = &[("cmd", &["/C", "clip"])];
+
+#[cfg(all(unix, not(target_os = "macos")))]
+const CLIPBOARD_COMMANDS: &[(&str, &[&str])] = &[
+    ("wl-copy", &[]),
+    ("xclip", &["-selection", "clipboard"]),
+    ("xsel", &["--clipboard", "--input"]),
+];
 
 #[derive(Serialize, Deserialize)]
 struct Credentials {
@@ -27,6 +50,36 @@ pub struct AuthInfo {
 pub struct LoginResult {
     pub api_key: String,
     pub email: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RedeemAuthCodeRequest {
+    code: String,
+    state: String,
+    #[serde(rename = "codeVerifier")]
+    code_verifier: String,
+}
+
+#[derive(Deserialize)]
+struct RedeemAuthCodeResponse {
+    #[serde(rename = "apiKey")]
+    api_key: String,
+    email: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+enum AuthCodeSource {
+    Callback,
+    Prompt,
+}
+
+enum AuthInput {
+    Code {
+        code: String,
+        source: AuthCodeSource,
+        callback_stream: Option<TcpStream>,
+    },
+    Error(String),
 }
 
 pub struct AuthManager;
@@ -113,11 +166,6 @@ impl AuthManager {
     }
 }
 
-fn find_available_port() -> Result<u16> {
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    Ok(listener.local_addr()?.port())
-}
-
 pub(crate) fn generate_state() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -127,79 +175,437 @@ pub(crate) fn generate_state() -> String {
         .to_string()
 }
 
-pub fn login_with_browser() -> Result<LoginResult> {
-    let port = find_available_port()?;
-    let state = generate_state();
-    let redirect_uri = format!("http://localhost:{}", port);
+fn generate_random_token() -> Result<String> {
+    let rng = SystemRandom::new();
+    let mut bytes = [0u8; 32];
+    rng.fill(&mut bytes)
+        .map_err(|_| anyhow::anyhow!("Failed to generate random auth token"))?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
 
-    let website_host = config::get("open_browser_website_host")?;
-    let auth_url = format!(
-        "{}/auth/cli?callback_uri={}&state={}",
-        website_host,
-        urlencoding::encode(&redirect_uri),
-        urlencoding::encode(&state)
-    );
+fn pkce_challenge_from_verifier(verifier: &str) -> String {
+    let hash = digest::digest(&digest::SHA256, verifier.as_bytes());
+    URL_SAFE_NO_PAD.encode(hash.as_ref())
+}
 
-    println!("Opening browser for authentication...");
-    if open::that(&auth_url).is_err() {
-        eprintln!("Couldn't open a browser automatically.");
-        eprintln!("Open this URL to continue: {}", auth_url);
+fn command_exists(program: &str) -> bool {
+    let path = Path::new(program);
+    if path.is_absolute() {
+        return path.is_file();
     }
 
-    let server = Server::http(format!("127.0.0.1:{}", port))
-        .map_err(|e| anyhow::anyhow!("Failed to start server: {}", e))?;
-    println!("Waiting for authorization...");
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
+        .unwrap_or(false)
+}
 
-    for request in server.incoming_requests() {
-        let url = request.url().to_string();
+fn can_copy_to_clipboard() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        true
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        CLIPBOARD_COMMANDS
+            .iter()
+            .any(|(program, _)| command_exists(program))
+    }
+}
 
-        // Parse query parameters from the URL
-        if url.contains('?') {
-            let query_string = url.split('?').nth(1).unwrap_or("");
-            let params: std::collections::HashMap<String, String> = query_string
-                .split('&')
-                .filter_map(|pair| {
-                    let mut parts = pair.split('=');
-                    let key = parts.next()?.to_string();
-                    let value = parts.next()?.to_string();
-                    Some((key, value))
-                })
-                .collect();
-
-            // Check for api_key - assume positive response
-            if let (Some(api_key), Some(return_url)) =
-                (params.get("api_key"), params.get("return_url"))
-            {
-                // Decode the return_url since it comes URL-encoded
-                let decoded_return_url = urlencoding::decode(return_url)
-                    .unwrap_or(std::borrow::Cow::Borrowed(return_url));
-
-                // Extract email if provided
-                let email = params.get("email").map(|e| {
-                    urlencoding::decode(e)
-                        .unwrap_or(std::borrow::Cow::Borrowed(e))
-                        .to_string()
-                });
-
-                // Add success param to return URL
-                let redirect_url = if decoded_return_url.contains('?') {
-                    format!("{}&success=true", decoded_return_url)
-                } else {
-                    format!("{}?success=true", decoded_return_url)
-                };
-                let location_header =
-                    Header::from_bytes(&b"Location"[..], redirect_url.as_bytes()).unwrap();
-                let response = Response::from_string("")
-                    .with_status_code(302)
-                    .with_header(location_header);
-                let _ = request.respond(response);
-                return Ok(LoginResult {
-                    api_key: api_key.to_string(),
-                    email,
-                });
+fn copy_to_clipboard(text: &str) -> Result<()> {
+    let mut last_error = None;
+    for (program, args) in CLIPBOARD_COMMANDS {
+        let mut child = match Command::new(program)
+            .args(*args)
+            .stdin(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                last_error = Some(error);
+                continue;
             }
+        };
+
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Failed to open clipboard command stdin"))?;
+        stdin.write_all(text.as_bytes())?;
+        drop(stdin);
+
+        if child.wait()?.success() {
+            return Ok(());
         }
     }
 
-    anyhow::bail!("Server stopped unexpectedly");
+    match last_error {
+        Some(error) => Err(error.into()),
+        None => bail!("No clipboard command available"),
+    }
+}
+
+fn print_opening_browser() {
+    eprintln!("Opening browser to sign in…");
+}
+
+fn print_auth_url(auth_url: &str, can_copy_url: bool) {
+    eprintln!();
+    if can_copy_url {
+        eprintln!("Browser didn't open? Use the url below to sign in (c to copy)");
+    } else {
+        eprintln!("Browser didn't open? Use the url below to sign in");
+    }
+    eprintln!();
+    eprintln!("{auth_url}");
+    eprintln!();
+}
+
+fn parse_query_params(query: &str) -> HashMap<String, String> {
+    query
+        .split('&')
+        .filter_map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            let key = urlencoding::decode(key).ok()?.into_owned();
+            let value = urlencoding::decode(value).ok()?.into_owned();
+            Some((key, value))
+        })
+        .collect()
+}
+
+fn callback_code_from_request_line(
+    request_line: &str,
+    expected_state: &str,
+) -> Result<Option<String>> {
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default();
+    let target = parts.next().unwrap_or_default();
+
+    if method != "GET" {
+        return Ok(None);
+    }
+
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    if path != "/callback" {
+        return Ok(None);
+    }
+
+    let params = parse_query_params(query);
+    if params.get("state").map(String::as_str) != Some(expected_state) {
+        bail!("Invalid state parameter");
+    }
+
+    let code = params
+        .get("code")
+        .filter(|code| !code.is_empty())
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("Missing code parameter"))?;
+
+    Ok(Some(code))
+}
+
+fn respond_to_callback(mut stream: TcpStream, status: &str, content_type: &str, body: &[u8]) {
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(response.as_bytes());
+    let _ = stream.write_all(body);
+    let _ = stream.flush();
+}
+
+fn respond_to_callback_text(stream: TcpStream, status: &str, body: &str) {
+    respond_to_callback(stream, status, "text/plain; charset=utf-8", body.as_bytes());
+}
+
+fn respond_to_callback_redirect(mut stream: TcpStream, location: &str) {
+    let response = format!(
+        "HTTP/1.1 302 Found\r\nLocation: {location}\r\nCache-Control: no-store\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    let _ = stream.write_all(response.as_bytes());
+    let _ = stream.flush();
+}
+
+fn handle_callback_request(
+    stream: TcpStream,
+    expected_state: &str,
+) -> Result<Option<(String, TcpStream)>> {
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut request_line = String::new();
+    reader.read_line(&mut request_line)?;
+
+    match callback_code_from_request_line(&request_line, expected_state) {
+        Ok(Some(code)) => Ok(Some((code, stream))),
+        Ok(None) => {
+            respond_to_callback_text(stream, "404 Not Found", "Not found");
+            Ok(None)
+        }
+        Err(error) => {
+            respond_to_callback_text(stream, "400 Bad Request", &error.to_string());
+            Err(error)
+        }
+    }
+}
+
+fn start_callback_server(
+    expected_state: String,
+    tx: mpsc::UnboundedSender<AuthInput>,
+) -> Result<String> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    let callback_url = format!("http://127.0.0.1:{port}/callback");
+
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else {
+                continue;
+            };
+
+            match handle_callback_request(stream, &expected_state) {
+                Ok(Some((code, callback_stream))) => {
+                    let _ = tx.send(AuthInput::Code {
+                        code,
+                        source: AuthCodeSource::Callback,
+                        callback_stream: Some(callback_stream),
+                    });
+                    break;
+                }
+                Ok(None) => {}
+                Err(_) => {}
+            }
+        }
+    });
+
+    Ok(callback_url)
+}
+
+fn read_auth_code(
+    stdin_is_terminal: bool,
+    auth_url: &str,
+    can_copy_url: bool,
+) -> Result<Option<String>> {
+    if stdin_is_terminal {
+        eprint!("Paste code here if prompted > ");
+        let _ = io::stderr().flush();
+    }
+
+    let mut input = String::new();
+    let bytes_read = io::stdin().lock().read_line(&mut input)?;
+    if bytes_read == 0 {
+        bail!("Authentication cancelled");
+    }
+
+    let code = input.trim().to_string();
+    if code.is_empty() {
+        bail!("Authentication cancelled");
+    }
+    if stdin_is_terminal && can_copy_url && code.eq_ignore_ascii_case("c") {
+        match copy_to_clipboard(auth_url) {
+            Ok(()) => eprintln!("Copied sign-in URL to clipboard."),
+            Err(error) => eprintln!("Couldn't copy sign-in URL: {error}"),
+        }
+        return Ok(None);
+    }
+
+    Ok(Some(code))
+}
+
+fn spawn_auth_code_reader(
+    stdin_is_terminal: bool,
+    auth_url: String,
+    can_copy_url: bool,
+    tx: mpsc::UnboundedSender<AuthInput>,
+) {
+    thread::spawn(move || loop {
+        match read_auth_code(stdin_is_terminal, &auth_url, can_copy_url) {
+            Ok(Some(code)) => {
+                let _ = tx.send(AuthInput::Code {
+                    code,
+                    source: AuthCodeSource::Prompt,
+                    callback_stream: None,
+                });
+                return;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let _ = tx.send(AuthInput::Error(error.to_string()));
+                return;
+            }
+        }
+    });
+}
+
+async fn handle_auth_input(
+    input: AuthInput,
+    state: &str,
+    code_verifier: &str,
+    stdin_is_terminal: bool,
+    manual_auth_url: &str,
+    can_copy_url: bool,
+    tx: &mpsc::UnboundedSender<AuthInput>,
+    success_url: &str,
+) -> Result<Option<LoginResult>> {
+    match input {
+        AuthInput::Code {
+            code,
+            source,
+            callback_stream,
+        } => match redeem_auth_code(code, state, code_verifier).await {
+            Ok(result) => {
+                if let Some(stream) = callback_stream {
+                    respond_to_callback_redirect(stream, success_url);
+                }
+                if matches!(source, AuthCodeSource::Callback) && stdin_is_terminal {
+                    eprintln!();
+                }
+                Ok(Some(result))
+            }
+            Err(error) if matches!(source, AuthCodeSource::Prompt) && stdin_is_terminal => {
+                eprintln!("Invalid auth code: {error}");
+                spawn_auth_code_reader(
+                    stdin_is_terminal,
+                    manual_auth_url.to_string(),
+                    can_copy_url,
+                    tx.clone(),
+                );
+                Ok(None)
+            }
+            Err(error) if matches!(source, AuthCodeSource::Callback) => {
+                if let Some(stream) = callback_stream {
+                    respond_to_callback_text(
+                        stream,
+                        "500 Internal Server Error",
+                        "Authentication failed. Return to the terminal and try again.",
+                    );
+                }
+                if stdin_is_terminal {
+                    eprintln!("Automatic browser callback failed: {error}");
+                }
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        },
+        AuthInput::Error(error) => bail!(error),
+    }
+}
+
+async fn recv_auth_input(rx: &mut mpsc::UnboundedReceiver<AuthInput>) -> Result<Option<AuthInput>> {
+    tokio::select! {
+        input = rx.recv() => Ok(input),
+        result = signal::ctrl_c() => {
+            result?;
+            bail!("Authentication cancelled")
+        }
+    }
+}
+
+async fn redeem_auth_code(code: String, state: &str, code_verifier: &str) -> Result<LoginResult> {
+    let api_host = config::get("api_host")?;
+    let url = format!("{}/cli/auth/redeem", api_host);
+    let client = config::create_http_client()?;
+    let response = client
+        .post(url)
+        .json(&RedeemAuthCodeRequest {
+            code,
+            state: state.to_string(),
+            code_verifier: code_verifier.to_string(),
+        })
+        .send()
+        .await?;
+    let response = config::check_api_response(response).await?;
+    let body = response.json::<RedeemAuthCodeResponse>().await?;
+
+    Ok(LoginResult {
+        api_key: body.api_key,
+        email: body.email,
+    })
+}
+
+pub async fn login_with_browser() -> Result<LoginResult> {
+    let state = generate_random_token()?;
+    let code_verifier = generate_random_token()?;
+    let code_challenge = pkce_challenge_from_verifier(&code_verifier);
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let callback_url = start_callback_server(state.clone(), tx.clone())?;
+    let website_host = config::get("open_browser_website_host")?;
+    let auto_auth_url = format!(
+        "{}/auth/cli?code=true&state={}&code_challenge={}&callback_uri={}",
+        website_host,
+        urlencoding::encode(&state),
+        urlencoding::encode(&code_challenge),
+        urlencoding::encode(&callback_url)
+    );
+    let manual_auth_url = format!(
+        "{}/auth/cli?code=true&state={}&code_challenge={}",
+        website_host,
+        urlencoding::encode(&state),
+        urlencoding::encode(&code_challenge)
+    );
+    let success_url = format!("{website_host}/auth/cli?success=true");
+
+    let stdin_is_terminal = io::stdin().is_terminal();
+    let can_copy_url = stdin_is_terminal && can_copy_to_clipboard();
+    print_opening_browser();
+    print_auth_url(&manual_auth_url, can_copy_url);
+    spawn_auth_code_reader(
+        stdin_is_terminal,
+        manual_auth_url.clone(),
+        can_copy_url,
+        tx.clone(),
+    );
+
+    let _ = open::that(&auto_auth_url);
+
+    while let Some(input) = recv_auth_input(&mut rx).await? {
+        if let Some(result) = handle_auth_input(
+            input,
+            &state,
+            &code_verifier,
+            stdin_is_terminal,
+            &manual_auth_url,
+            can_copy_url,
+            &tx,
+            &success_url,
+        )
+        .await?
+        {
+            return Ok(result);
+        }
+    }
+
+    bail!("Authentication cancelled")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derives_rfc7636_s256_pkce_challenge() {
+        let challenge = pkce_challenge_from_verifier("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk");
+
+        assert_eq!(challenge, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
+    }
+
+    #[test]
+    fn extracts_callback_code_for_matching_state() {
+        let code = callback_code_from_request_line(
+            "GET /callback?code=wdcli_abc&state=state_123 HTTP/1.1",
+            "state_123",
+        )
+        .unwrap();
+
+        assert_eq!(code.as_deref(), Some("wdcli_abc"));
+    }
+
+    #[test]
+    fn rejects_callback_code_for_mismatched_state() {
+        let error = callback_code_from_request_line(
+            "GET /callback?code=wdcli_abc&state=other HTTP/1.1",
+            "state_123",
+        )
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "Invalid state parameter");
+    }
 }

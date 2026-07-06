@@ -28,8 +28,11 @@ use init::{
 use publish::{handle_publish, PublishArgs};
 use serde::Serialize;
 use stats::{handle_stat_create, handle_stat_delete, handle_stat_update};
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
+
+const CLAUDE_CODE_PLUGIN_HINT: &str =
+    r#"<claude-code-hint v="1" type="plugin" value="wavedash@claude-plugins-official" />"#;
 
 fn mask_token(token: &str) -> String {
     if token.len() > 10 {
@@ -459,20 +462,7 @@ fn env_flag_enabled(name: &str) -> bool {
 }
 
 fn is_browser_login_unavailable() -> bool {
-    if env_flag_enabled("CI") || env_flag_enabled("WAVEDASH_HEADLESS") {
-        return true;
-    }
-
-    if std::env::var_os("SSH_CONNECTION").is_some()
-        || std::env::var_os("SSH_CLIENT").is_some()
-        || std::env::var_os("SSH_TTY").is_some()
-    {
-        return true;
-    }
-
-    cfg!(target_os = "linux")
-        && std::env::var_os("DISPLAY").is_none()
-        && std::env::var_os("WAYLAND_DISPLAY").is_none()
+    env_flag_enabled("CI")
 }
 
 fn command_outputs_json(command: &Commands) -> bool {
@@ -505,6 +495,16 @@ fn command_outputs_json(command: &Commands) -> bool {
         } => *json,
         _ => false,
     }
+}
+
+fn command_suppresses_update_check(command: &Commands) -> bool {
+    matches!(
+        command,
+        Commands::Update
+            | Commands::Auth {
+                action: AuthCommands::Login { .. },
+            }
+    )
 }
 
 fn read_token_from_stdin() -> Result<String> {
@@ -547,6 +547,16 @@ fn auth_status_output(auth_info: auth::AuthInfo) -> AuthStatusOutput {
     }
 }
 
+fn maybe_emit_claude_plugin_hint() {
+    let is_claude_child_session = std::env::var_os("CLAUDE_CODE_CHILD_SESSION").is_some();
+    let is_claude_captured_command =
+        std::env::var_os("CLAUDECODE").is_some() && !std::io::stderr().is_terminal();
+
+    if is_claude_child_session || is_claude_captured_command {
+        eprintln!("{CLAUDE_CODE_PLUGIN_HINT}");
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Install rustls crypto provider for TLS
@@ -562,6 +572,7 @@ async fn main() {
 
 async fn run() -> Result<()> {
     let cli = Cli::parse();
+    maybe_emit_claude_plugin_hint();
 
     if cli.no_color || std::env::var_os("NO_COLOR").is_some() {
         colored::control::set_override(false);
@@ -580,8 +591,7 @@ async fn run() -> Result<()> {
         welcome::show_first_run_if_needed();
     }
 
-    // Check for updates in background, but skip if the user is already running `update`
-    let update_handle = if matches!(command, Commands::Update)
+    let update_handle = if command_suppresses_update_check(&command)
         || cli.no_update_check
         || command_outputs_json(&command)
         || env_flag_enabled("WAVEDASH_NO_UPDATE_CHECK")
@@ -638,12 +648,12 @@ async fn run() -> Result<()> {
                     } else {
                         if is_browser_login_unavailable() {
                             anyhow::bail!(
-                                "Browser login requires a local desktop session. In headless, SSH, CI, or cloud-agent environments, set WAVEDASH_TOKEN or pipe a token into `wavedash auth login --token-stdin`."
+                                "Browser login isn't available in this environment.\n\nCreate an API key at https://wavedash.com/dev-portal/keys. Then set WAVEDASH_TOKEN or pipe the key into wavedash auth login --token-stdin."
                             );
                         }
 
                         // Browser-based login
-                        match login_with_browser() {
+                        match login_with_browser().await {
                             Ok(result) => {
                                 auth_manager
                                     .store_credentials(&result.api_key, result.email.as_deref())?;
