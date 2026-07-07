@@ -10,23 +10,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
-use std::process::{Command, Stdio};
 use std::thread;
-use tokio::{signal, sync::mpsc};
+use tokio::{
+    signal,
+    sync::mpsc,
+    time::{sleep, Duration},
+};
 
-#[cfg(target_os = "macos")]
-const CLIPBOARD_COMMANDS: &[(&str, &[&str])] = &[("pbcopy", &[])];
-
-#[cfg(target_os = "windows")]
-const CLIPBOARD_COMMANDS: &[(&str, &[&str])] = &[("cmd", &["/C", "clip"])];
-
-#[cfg(all(unix, not(target_os = "macos")))]
-const CLIPBOARD_COMMANDS: &[(&str, &[&str])] = &[
-    ("wl-copy", &[]),
-    ("xclip", &["-selection", "clipboard"]),
-    ("xsel", &["--clipboard", "--input"]),
-];
+const AUTH_CODE_PROMPT_DELAY: Duration = Duration::from_secs(3);
 
 #[derive(Serialize, Deserialize)]
 struct Credentials {
@@ -188,74 +179,13 @@ fn pkce_challenge_from_verifier(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(hash.as_ref())
 }
 
-fn command_exists(program: &str) -> bool {
-    let path = Path::new(program);
-    if path.is_absolute() {
-        return path.is_file();
-    }
-
-    std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
-        .unwrap_or(false)
-}
-
-fn can_copy_to_clipboard() -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        true
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        CLIPBOARD_COMMANDS
-            .iter()
-            .any(|(program, _)| command_exists(program))
-    }
-}
-
-fn copy_to_clipboard(text: &str) -> Result<()> {
-    let mut last_error = None;
-    for (program, args) in CLIPBOARD_COMMANDS {
-        let mut child = match Command::new(program)
-            .args(*args)
-            .stdin(Stdio::piped())
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(error) => {
-                last_error = Some(error);
-                continue;
-            }
-        };
-
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("Failed to open clipboard command stdin"))?;
-        stdin.write_all(text.as_bytes())?;
-        drop(stdin);
-
-        if child.wait()?.success() {
-            return Ok(());
-        }
-    }
-
-    match last_error {
-        Some(error) => Err(error.into()),
-        None => bail!("No clipboard command available"),
-    }
-}
-
 fn print_opening_browser() {
     eprintln!("Opening browser to sign in…");
 }
 
-fn print_auth_url(auth_url: &str, can_copy_url: bool) {
+fn print_auth_url(auth_url: &str) {
     eprintln!();
-    if can_copy_url {
-        eprintln!("Browser didn't open? Use the url below to sign in (c to copy)");
-    } else {
-        eprintln!("Browser didn't open? Use the url below to sign in");
-    }
+    eprintln!("Browser didn't open? Use the url below to sign in");
     eprintln!();
     eprintln!("{auth_url}");
     eprintln!();
@@ -379,15 +309,9 @@ fn start_callback_server(
     Ok(callback_url)
 }
 
-fn read_auth_code(
-    stdin_is_terminal: bool,
-    auth_url: &str,
-    can_copy_url: bool,
-) -> Result<Option<String>> {
-    if stdin_is_terminal {
-        eprint!("Paste code here if prompted > ");
-        let _ = io::stderr().flush();
-    }
+fn read_auth_code() -> Result<Option<String>> {
+    eprint!("Paste code here if prompted > ");
+    let _ = io::stderr().flush();
 
     let mut input = String::new();
     let bytes_read = io::stdin().lock().read_line(&mut input)?;
@@ -397,30 +321,15 @@ fn read_auth_code(
 
     let code = input.trim().to_string();
     if code.is_empty() {
-        if stdin_is_terminal {
-            return Ok(None);
-        }
-        bail!("Authentication cancelled");
-    }
-    if stdin_is_terminal && can_copy_url && code.eq_ignore_ascii_case("c") {
-        match copy_to_clipboard(auth_url) {
-            Ok(()) => eprintln!("Copied sign-in URL to clipboard."),
-            Err(error) => eprintln!("Couldn't copy sign-in URL: {error}"),
-        }
         return Ok(None);
     }
 
     Ok(Some(code))
 }
 
-fn spawn_auth_code_reader(
-    stdin_is_terminal: bool,
-    auth_url: String,
-    can_copy_url: bool,
-    tx: mpsc::UnboundedSender<AuthInput>,
-) {
+fn spawn_auth_code_reader(tx: mpsc::UnboundedSender<AuthInput>) {
     thread::spawn(move || loop {
-        match read_auth_code(stdin_is_terminal, &auth_url, can_copy_url) {
+        match read_auth_code() {
             Ok(Some(code)) => {
                 let _ = tx.send(AuthInput::Code {
                     code,
@@ -443,8 +352,6 @@ async fn handle_auth_input(
     state: &str,
     code_verifier: &str,
     stdin_is_terminal: bool,
-    manual_auth_url: &str,
-    can_copy_url: bool,
     tx: &mpsc::UnboundedSender<AuthInput>,
     success_url: &str,
 ) -> Result<Option<LoginResult>> {
@@ -465,12 +372,7 @@ async fn handle_auth_input(
             }
             Err(error) if matches!(source, AuthCodeSource::Prompt) && stdin_is_terminal => {
                 eprintln!("Invalid auth code: {error}");
-                spawn_auth_code_reader(
-                    stdin_is_terminal,
-                    manual_auth_url.to_string(),
-                    can_copy_url,
-                    tx.clone(),
-                );
+                spawn_auth_code_reader(tx.clone());
                 Ok(None)
             }
             Err(error) if matches!(source, AuthCodeSource::Callback) => {
@@ -491,16 +393,6 @@ async fn handle_auth_input(
             Err(error) => Err(error),
         },
         AuthInput::Error(error) => bail!(error),
-    }
-}
-
-async fn recv_auth_input(rx: &mut mpsc::UnboundedReceiver<AuthInput>) -> Result<Option<AuthInput>> {
-    tokio::select! {
-        input = rx.recv() => Ok(input),
-        result = signal::ctrl_c() => {
-            result?;
-            bail!("Authentication cancelled")
-        }
     }
 }
 
@@ -549,38 +441,40 @@ pub async fn login_with_browser() -> Result<LoginResult> {
     let success_url = format!("{website_host}/auth/cli?success=true");
 
     let stdin_is_terminal = io::stdin().is_terminal();
-    let can_copy_url = stdin_is_terminal && can_copy_to_clipboard();
     print_opening_browser();
-    print_auth_url(&manual_auth_url, can_copy_url);
-    if stdin_is_terminal {
-        spawn_auth_code_reader(
-            stdin_is_terminal,
-            manual_auth_url.clone(),
-            can_copy_url,
-            tx.clone(),
-        );
-    }
-
+    print_auth_url(&manual_auth_url);
     let _ = open::that(&auto_auth_url);
+    let mut auth_code_prompt_started = false;
 
-    while let Some(input) = recv_auth_input(&mut rx).await? {
-        if let Some(result) = handle_auth_input(
-            input,
-            &state,
-            &code_verifier,
-            stdin_is_terminal,
-            &manual_auth_url,
-            can_copy_url,
-            &tx,
-            &success_url,
-        )
-        .await?
-        {
-            return Ok(result);
+    loop {
+        tokio::select! {
+            input = rx.recv() => {
+                let Some(input) = input else {
+                    bail!("Authentication cancelled");
+                };
+                if let Some(result) = handle_auth_input(
+                    input,
+                    &state,
+                    &code_verifier,
+                    stdin_is_terminal,
+                    &tx,
+                    &success_url,
+                )
+                .await?
+                {
+                    return Ok(result);
+                }
+            }
+            result = signal::ctrl_c() => {
+                result?;
+                bail!("Authentication cancelled")
+            }
+            _ = sleep(AUTH_CODE_PROMPT_DELAY), if stdin_is_terminal && !auth_code_prompt_started => {
+                spawn_auth_code_reader(tx.clone());
+                auth_code_prompt_started = true;
+            }
         }
     }
-
-    bail!("Authentication cancelled")
 }
 
 #[cfg(test)]
