@@ -448,9 +448,15 @@ pub async fn login_with_browser() -> Result<LoginResult> {
 
     loop {
         tokio::select! {
+            biased;
+
             input = rx.recv() => {
                 let Some(input) = input else {
                     bail!("Authentication cancelled");
+                };
+                let input_source = match &input {
+                    AuthInput::Code { source, .. } => Some(*source),
+                    AuthInput::Error(_) => None,
                 };
                 if let Some(result) = handle_auth_input(
                     input,
@@ -463,6 +469,13 @@ pub async fn login_with_browser() -> Result<LoginResult> {
                 .await?
                 {
                     return Ok(result);
+                }
+                if matches!(input_source, Some(AuthCodeSource::Callback))
+                    && stdin_is_terminal
+                    && !auth_code_prompt_started
+                {
+                    spawn_auth_code_reader(tx.clone());
+                    auth_code_prompt_started = true;
                 }
             }
             result = signal::ctrl_c() => {

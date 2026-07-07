@@ -89,8 +89,8 @@ pub async fn handle_stat_update(
         .await?;
 
     let resp = config::check_api_response(resp).await?;
-    let stat: Stat = resp.json().await?;
     if json_output {
+        let stat: Stat = resp.json().await?;
         println!("{}", serde_json::to_string_pretty(&stat)?);
         return Ok(());
     }
