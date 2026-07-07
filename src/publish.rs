@@ -34,17 +34,6 @@ struct PublishResponse {
     game_slug: String,
 }
 
-#[derive(Debug, Serialize)]
-struct PublishOutput {
-    #[serde(rename = "buildId")]
-    build_id: String,
-    #[serde(rename = "releaseId")]
-    release_id: String,
-    #[serde(rename = "gameSlug")]
-    game_slug: String,
-    url: String,
-}
-
 pub struct PublishArgs {
     pub config_path: PathBuf,
     pub build_id: String,
@@ -54,7 +43,6 @@ pub struct PublishArgs {
     pub removed: Vec<String>,
     pub fixed: Vec<String>,
     pub adjusted: Vec<String>,
-    pub json: bool,
 }
 
 fn trim_optional(value: Option<String>) -> Option<String> {
@@ -117,7 +105,6 @@ pub async fn handle_publish(args: PublishArgs) -> Result<()> {
         removed,
         fixed,
         adjusted,
-        json,
     } = args;
 
     let wavedash_config = WavedashConfig::load(&config_path)?;
@@ -148,22 +135,9 @@ pub async fn handle_publish(args: PublishArgs) -> Result<()> {
     let result: PublishResponse = response.json().await?;
 
     let site_host = config::get("open_browser_website_host")?;
-    let url = format!("{}/games/{}", site_host, result.game_slug);
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&PublishOutput {
-                build_id,
-                release_id: result.release_id,
-                game_slug: result.game_slug,
-                url,
-            })?
-        );
-        return Ok(());
-    }
     println!("✓ Published build {}", build_id);
     println!("Release ID: {}", result.release_id);
-    println!("View at: {}", url);
+    println!("View at: {}/games/{}", site_host, result.game_slug);
 
     Ok(())
 }

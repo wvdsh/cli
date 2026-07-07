@@ -103,18 +103,6 @@ struct UploadCompleteResponse {
     game_slug: String,
 }
 
-#[derive(Debug, Serialize)]
-struct BuildPushOutput {
-    #[serde(rename = "buildId")]
-    build_id: String,
-    #[serde(rename = "gameSlug")]
-    game_slug: String,
-    #[serde(rename = "buildUuid")]
-    build_uuid: String,
-    #[serde(rename = "playtestUrl")]
-    playtest_url: String,
-}
-
 async fn notify_upload_complete(
     game_id: &str,
     build_id: &str,
@@ -145,7 +133,6 @@ pub async fn handle_build_push(
     config_path: PathBuf,
     verbose: bool,
     message: Option<String>,
-    json: bool,
 ) -> Result<()> {
     // Load wavedash.toml config
     let wavedash_config = WavedashConfig::load(&config_path)?;
@@ -206,13 +193,7 @@ pub async fn handle_build_push(
     // Initialize uploader and upload using pre-scanned files
     let uploader = R2Uploader::new(&r2_config, &creds.bucket_name)?;
     uploader
-        .upload_directory_from_scan(
-            &scanned_files,
-            total_bytes,
-            &creds.r2_key_prefix,
-            verbose && !json,
-            !json,
-        )
+        .upload_directory_from_scan(&scanned_files, total_bytes, &creds.r2_key_prefix, verbose)
         .await?;
 
     // Notify the server that upload is complete
@@ -222,18 +203,6 @@ pub async fn handle_build_push(
     // Print the play URL
     let site_host = config::get("open_browser_website_host")?;
     let play_url = format!("{}/playtest/{}/{}", site_host, result.game_slug, creds.uuid);
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&BuildPushOutput {
-                build_id: creds.game_build_id,
-                game_slug: result.game_slug,
-                build_uuid: creds.uuid,
-                playtest_url: play_url,
-            })?
-        );
-        return Ok(());
-    }
     println!("\nBuild ID: {}", creds.game_build_id);
     println!("▶ Play at: {}", play_url);
 

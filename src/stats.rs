@@ -1,24 +1,15 @@
 use crate::auth::{AuthManager, AuthSource};
 use crate::config;
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 struct Stat {
     _id: String,
     identifier: String,
     #[serde(rename = "displayName")]
     display_name: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DeleteOutput<'a> {
-    success: bool,
-    #[serde(rename = "gameId")]
-    game_id: &'a str,
-    #[serde(rename = "statId")]
-    stat_id: &'a str,
 }
 
 fn require_api_key() -> Result<String> {
@@ -32,12 +23,7 @@ fn require_api_key() -> Result<String> {
     }
 }
 
-pub async fn handle_stat_create(
-    game_id: &str,
-    identifier: &str,
-    name: &str,
-    json_output: bool,
-) -> Result<()> {
+pub async fn handle_stat_create(game_id: &str, identifier: &str, name: &str) -> Result<()> {
     let api_key = require_api_key()?;
     let client = config::create_http_client()?;
     let api_host = config::get("api_host")?;
@@ -55,10 +41,6 @@ pub async fn handle_stat_create(
 
     let resp = config::check_api_response(resp).await?;
     let stat: Stat = resp.json().await?;
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&stat)?);
-        return Ok(());
-    }
     println!(
         "✓ Created stat \"{}\" (id: {}, identifier: {})",
         stat.display_name, stat._id, stat.identifier
@@ -71,7 +53,6 @@ pub async fn handle_stat_update(
     stat_id: &str,
     identifier: &str,
     name: &str,
-    json_output: bool,
 ) -> Result<()> {
     let api_key = require_api_key()?;
     let client = config::create_http_client()?;
@@ -88,22 +69,12 @@ pub async fn handle_stat_update(
         .send()
         .await?;
 
-    let resp = config::check_api_response(resp).await?;
-    if json_output {
-        let stat: Stat = resp.json().await?;
-        println!("{}", serde_json::to_string_pretty(&stat)?);
-        return Ok(());
-    }
+    config::check_api_response(resp).await?;
     println!("✓ Updated stat {}", stat_id);
     Ok(())
 }
 
-pub async fn handle_stat_delete(
-    game_id: &str,
-    stat_id: &str,
-    force: bool,
-    json_output: bool,
-) -> Result<()> {
+pub async fn handle_stat_delete(game_id: &str, stat_id: &str, force: bool) -> Result<()> {
     let api_key = require_api_key()?;
     let client = config::create_http_client()?;
     let api_host = config::get("api_host")?;
@@ -119,17 +90,6 @@ pub async fn handle_stat_delete(
         .await?;
 
     config::check_api_response(resp).await?;
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&DeleteOutput {
-                success: true,
-                game_id,
-                stat_id,
-            })?
-        );
-        return Ok(());
-    }
     println!("✓ Deleted stat {}", stat_id);
     Ok(())
 }

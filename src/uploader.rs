@@ -145,7 +145,6 @@ impl R2Uploader {
         total_bytes: u64,
         prefix: &str,
         verbose: bool,
-        progress_enabled: bool,
     ) -> Result<()> {
         let manifest = build_manifest_from_scan(scanned_files, prefix);
         if manifest.is_empty() {
@@ -162,7 +161,7 @@ impl R2Uploader {
             );
         }
 
-        let progress = progress_enabled.then(|| Arc::new(ProgressReporter::new(total_bytes)));
+        let progress = Arc::new(ProgressReporter::new(total_bytes));
         let uploaded_bytes = Arc::new(AtomicU64::new(0));
         let operator = self.operator.clone();
         let concurrency = self.concurrency.max(1);
@@ -173,14 +172,7 @@ impl R2Uploader {
             let uploaded_bytes = uploaded_bytes.clone();
 
             async move {
-                upload_file(
-                    &operator,
-                    &entry,
-                    progress.as_deref(),
-                    &uploaded_bytes,
-                    total_bytes,
-                )
-                .await?;
+                upload_file(&operator, &entry, &progress, &uploaded_bytes, total_bytes).await?;
                 Ok::<(), anyhow::Error>(())
             }
         }))
@@ -188,9 +180,7 @@ impl R2Uploader {
         .try_collect::<Vec<_>>()
         .await?;
 
-        if let Some(progress) = &progress {
-            progress.finish();
-        }
+        progress.finish();
         Ok(())
     }
 }
@@ -266,7 +256,7 @@ fn build_object_key(prefix: &str, relative: &Path) -> String {
 async fn upload_file(
     operator: &Operator,
     entry: &ManifestEntry,
-    progress: Option<&ProgressReporter>,
+    progress: &ProgressReporter,
     uploaded_bytes: &Arc<AtomicU64>,
     total_bytes: u64,
 ) -> Result<()> {
@@ -298,9 +288,7 @@ async fn upload_file(
         let new_total =
             uploaded_bytes.fetch_add(bytes_read as u64, Ordering::Relaxed) + bytes_read as u64;
         let clamped = new_total.min(total_bytes);
-        if let Some(progress) = progress {
-            progress.update(clamped);
-        }
+        progress.update(clamped);
     }
 
     writer
