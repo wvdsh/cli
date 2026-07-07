@@ -18,6 +18,7 @@ use tokio::{
 };
 
 const AUTH_CODE_PROMPT_DELAY: Duration = Duration::from_secs(3);
+const AUTH_CODE_REDEEM_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Serialize, Deserialize)]
 struct Credentials {
@@ -402,6 +403,7 @@ async fn redeem_auth_code(code: String, state: &str, code_verifier: &str) -> Res
     let client = config::create_http_client()?;
     let response = client
         .post(url)
+        .timeout(AUTH_CODE_REDEEM_TIMEOUT)
         .json(&RedeemAuthCodeRequest {
             code,
             state: state.to_string(),
