@@ -397,6 +397,9 @@ fn read_auth_code(
 
     let code = input.trim().to_string();
     if code.is_empty() {
+        if stdin_is_terminal {
+            return Ok(None);
+        }
         bail!("Authentication cancelled");
     }
     if stdin_is_terminal && can_copy_url && code.eq_ignore_ascii_case("c") {
@@ -480,8 +483,10 @@ async fn handle_auth_input(
                 }
                 if stdin_is_terminal {
                     eprintln!("Automatic browser callback failed: {error}");
+                    Ok(None)
+                } else {
+                    Err(error)
                 }
-                Ok(None)
             }
             Err(error) => Err(error),
         },
@@ -547,12 +552,14 @@ pub async fn login_with_browser() -> Result<LoginResult> {
     let can_copy_url = stdin_is_terminal && can_copy_to_clipboard();
     print_opening_browser();
     print_auth_url(&manual_auth_url, can_copy_url);
-    spawn_auth_code_reader(
-        stdin_is_terminal,
-        manual_auth_url.clone(),
-        can_copy_url,
-        tx.clone(),
-    );
+    if stdin_is_terminal {
+        spawn_auth_code_reader(
+            stdin_is_terminal,
+            manual_auth_url.clone(),
+            can_copy_url,
+            tx.clone(),
+        );
+    }
 
     let _ = open::that(&auto_auth_url);
 

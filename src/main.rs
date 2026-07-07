@@ -462,7 +462,7 @@ fn env_flag_enabled(name: &str) -> bool {
 }
 
 fn is_browser_login_unavailable() -> bool {
-    env_flag_enabled("CI")
+    env_flag_enabled("CI") || !std::io::stdin().is_terminal()
 }
 
 fn command_outputs_json(command: &Commands) -> bool {
