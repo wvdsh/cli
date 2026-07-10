@@ -26,6 +26,7 @@ use init::{
 };
 use publish::{handle_publish, PublishArgs};
 use stats::{handle_stat_create, handle_stat_delete, handle_stat_update};
+use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 
 fn mask_token(token: &str) -> String {
@@ -136,6 +137,12 @@ enum AuthCommands {
     Login {
         #[arg(long, help = "API key for manual authentication")]
         token: Option<String>,
+        #[arg(
+            long = "token-stdin",
+            conflicts_with = "token",
+            help = "Read API key from stdin"
+        )]
+        token_stdin: bool,
     },
     Logout,
     Status,
@@ -352,6 +359,29 @@ enum AchievementCommands {
     },
 }
 
+fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            !value.is_empty() && value != "0" && value != "false"
+        })
+        .unwrap_or(false)
+}
+
+fn is_browser_login_unavailable() -> bool {
+    env_flag_enabled("CI") || !std::io::stdin().is_terminal()
+}
+
+fn read_token_from_stdin() -> Result<String> {
+    let mut token = String::new();
+    std::io::stdin().read_to_string(&mut token)?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        anyhow::bail!("No token provided on stdin");
+    }
+    Ok(token)
+}
+
 #[tokio::main]
 async fn main() {
     // Install rustls crypto provider for TLS
@@ -381,8 +411,14 @@ async fn run() -> Result<()> {
         welcome::show_first_run_if_needed();
     }
 
-    // Check for updates in background, but skip if the user is already running `update`
-    let update_handle = if matches!(command, Commands::Update) {
+    // Check for updates in background, but skip commands with their own focused prompts.
+    let update_handle = if matches!(
+        command,
+        Commands::Update
+            | Commands::Auth {
+                action: AuthCommands::Login { .. },
+            }
+    ) {
         None
     } else {
         Some(updater::check_for_update())
@@ -396,16 +432,29 @@ async fn run() -> Result<()> {
             let auth_manager = AuthManager::new()?;
 
             match action {
-                AuthCommands::Login { token } => {
+                AuthCommands::Login { token, token_stdin } => {
+                    let token = if token_stdin {
+                        Some(read_token_from_stdin()?)
+                    } else {
+                        token
+                    };
+
                     if let Some(api_key) = token {
                         // Manual token input (no email available)
                         auth_manager.store_credentials(&api_key, None)?;
                         println!("✓ Successfully stored API key");
                     } else {
+                        if is_browser_login_unavailable() {
+                            anyhow::bail!(
+                                "Browser login isn't available in this environment.\n\nCreate an API key at https://wavedash.com/dev-portal/keys. Then set WAVEDASH_TOKEN or pipe the key into wavedash auth login --token-stdin."
+                            );
+                        }
+
                         // Browser-based login
-                        match login_with_browser() {
+                        match login_with_browser().await {
                             Ok(result) => {
-                                auth_manager.store_credentials(&result.api_key, result.email.as_deref())?;
+                                auth_manager
+                                    .store_credentials(&result.api_key, result.email.as_deref())?;
                                 println!("✓ Successfully authenticated!");
                             }
                             Err(e) => {

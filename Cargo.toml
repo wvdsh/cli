@@ -58,18 +58,13 @@ walkdir = "2.5"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # Authentication
-tiny_http = "0.12"
+base64 = "0.22"
+ring = "0.17"
 open = "5.0"
-url = "2.5"
 urlencoding = "2.1"
 
 # Update checking
 self_update = { version = "0.44", features = ["archive-tar", "archive-zip", "compression-flate2", "compression-zip-deflate"] }
-
-
-
-
-
 
 [build-dependencies]
 dotenvy = "0.15"
