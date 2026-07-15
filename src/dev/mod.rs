@@ -180,8 +180,9 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
     }
     if no_open {
         println!("  --no-open set; open {} in your browser to start.", local_url);
-    } else {
-        open::that(&local_url)?;
+    } else if let Err(e) = crate::browser::open_url(&local_url) {
+        println!("  Couldn't open a browser automatically ({e}).");
+        println!("  Open {} in your browser to start.", local_url);
     }
 
     server::run(
