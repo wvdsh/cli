@@ -1,5 +1,6 @@
 mod achievements;
 mod auth;
+mod browser;
 mod builds;
 mod config;
 mod dev;

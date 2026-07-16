@@ -445,7 +445,7 @@ pub async fn login_with_browser() -> Result<LoginResult> {
     let stdin_is_terminal = io::stdin().is_terminal();
     print_opening_browser();
     print_auth_url(&manual_auth_url);
-    let _ = open::that(&auto_auth_url);
+    let _ = crate::browser::open_url(&auto_auth_url);
     let mut auth_code_prompt_started = false;
 
     loop {
