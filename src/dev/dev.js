@@ -24,10 +24,10 @@
 		}
 	});
 
-	// Covers the page until the game calls Wavedash.init() — stricter than
-	// prod's gate, deliberately. Translucent so engine loading UI shows through.
+	// Covers the page until the game signals Wavedash.loadComplete() — the same
+	// signal prod's loader waits for. Translucent so engine loading UI shows through.
 	function initGate() {
-		if (window.Wavedash.initialized) return;
+		if (window.Wavedash.gameLoaded) return;
 		var style = document.createElement('style');
 		style.textContent = '@keyframes wd-spin{to{transform:rotate(360deg)}}';
 		var spinner = document.createElement('div');
@@ -45,7 +45,7 @@
 		document.body.append(overlay);
 		var started = Date.now();
 		var tick = setInterval(function () {
-			if (window.Wavedash.initialized) {
+			if (window.Wavedash.gameLoaded) {
 				overlay.remove();
 				clearInterval(tick);
 				return;
@@ -56,8 +56,10 @@
 				msg.textContent = window.__wavedashBootError;
 			} else if (Date.now() - started > 10000) {
 				msg.textContent =
-					"Your game hasn't called Wavedash.init() — on wavedash.com " +
-					'the loading screen hangs exactly like this.';
+					"Your game hasn't called Wavedash.loadComplete() — on wavedash.com " +
+					'the loading screen hangs exactly like this. Engine builds call it ' +
+					'automatically when loading finishes, so this usually means the game ' +
+					'is still loading or failed to boot.';
 			}
 		}, 150);
 	}
