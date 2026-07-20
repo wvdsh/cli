@@ -139,9 +139,8 @@ pub async fn handle_clear_playtest_data(args: ClearPlaytestDataArgs<'_>) -> Resu
 
     let category_labels = categories
         .iter()
-        .map(|c| c.label())
-        .collect::<Vec<_>>()
-        .join("\n - ");
+        .map(|c| format!("\n - {}", c.label()))
+        .collect::<String>();
 
     let scope = match args.username {
         Some(user) => format!("player \"{}\"", user),
@@ -158,7 +157,7 @@ pub async fn handle_clear_playtest_data(args: ClearPlaytestDataArgs<'_>) -> Resu
         }
 
         println!(
-            "{} This will permanently delete \n - {}\nfor {} in game {}.",
+            "{} This will permanently delete {}\nfor {} in game {}.",
             "Warning:".yellow().bold(),
             category_labels.bold(),
             scope.bold(),
@@ -211,7 +210,7 @@ pub async fn handle_clear_playtest_data(args: ClearPlaytestDataArgs<'_>) -> Resu
         }
         _ => {
             println!(
-                "✓ Cleared \n - {}\nfor {} in game {}.",
+                "✓ Cleared {}\nfor {} in game {}.",
                 category_labels, scope, args.game_id
             );
         }
