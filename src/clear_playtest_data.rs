@@ -211,7 +211,7 @@ pub async fn handle_clear_playtest_data(args: ClearPlaytestDataArgs<'_>) -> Resu
         }
         _ => {
             println!(
-                "✓ Cleared {} for {} in game {}.",
+                "✓ Cleared \n - {}\nfor {} in game {}.",
                 category_labels, scope, args.game_id
             );
         }
