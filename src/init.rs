@@ -1,4 +1,4 @@
-use crate::auth::{AuthManager, AuthSource};
+use crate::auth::{require_api_key, AuthManager, AuthSource};
 use crate::config;
 use anyhow::Result;
 use comfy_table::modifiers::UTF8_ROUND_CORNERS;
@@ -443,17 +443,6 @@ pub async fn handle_init() -> Result<()> {
 }
 
 // ── Scripted create commands ─────────────────────────────────────────
-
-fn require_api_key() -> Result<String> {
-    let auth_manager = AuthManager::new()?;
-    let auth_info = auth_manager.get_auth_info();
-    match auth_info.source {
-        AuthSource::None => {
-            anyhow::bail!("Not authenticated. Run `wavedash auth login` first.")
-        }
-        _ => Ok(auth_info.api_key.unwrap()),
-    }
-}
 
 pub async fn handle_team_create(name: &str) -> Result<()> {
     let api_key = require_api_key()?;

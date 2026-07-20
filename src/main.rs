@@ -430,7 +430,7 @@ enum AchievementCommands {
     },
 }
 
-fn env_flag_enabled(name: &str) -> bool {
+pub(crate) fn env_flag_enabled(name: &str) -> bool {
     std::env::var(name)
         .map(|value| {
             let value = value.trim().to_ascii_lowercase();
@@ -439,7 +439,9 @@ fn env_flag_enabled(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn is_browser_login_unavailable() -> bool {
+/// True when we can't drive an interactive flow (CI or piped stdin), so
+/// browser login and confirmation prompts must be skipped.
+pub(crate) fn is_browser_login_unavailable() -> bool {
     env_flag_enabled("CI") || !std::io::stdin().is_terminal()
 }
 

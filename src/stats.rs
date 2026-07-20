@@ -1,4 +1,4 @@
-use crate::auth::{AuthManager, AuthSource};
+use crate::auth::require_api_key;
 use crate::config;
 use anyhow::Result;
 use serde::Deserialize;
@@ -10,17 +10,6 @@ struct Stat {
     identifier: String,
     #[serde(rename = "displayName")]
     display_name: String,
-}
-
-fn require_api_key() -> Result<String> {
-    let auth_manager = AuthManager::new()?;
-    let auth_info = auth_manager.get_auth_info();
-    match auth_info.source {
-        AuthSource::None => {
-            anyhow::bail!("Not authenticated. Run `wavedash auth login` first.")
-        }
-        _ => Ok(auth_info.api_key.unwrap()),
-    }
 }
 
 pub async fn handle_stat_create(game_id: &str, identifier: &str, name: &str) -> Result<()> {

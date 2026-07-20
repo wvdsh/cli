@@ -158,6 +158,20 @@ impl AuthManager {
     }
 }
 
+/// Return the active API key, or bail with the standard "not authenticated"
+/// message. Shared by every scripted command so the message and the
+/// [`AuthSource`] match stay in sync in one place.
+pub(crate) fn require_api_key() -> Result<String> {
+    let auth_manager = AuthManager::new()?;
+    let auth_info = auth_manager.get_auth_info();
+    match auth_info.source {
+        AuthSource::None => {
+            bail!("Not authenticated. Run `wavedash auth login` first.")
+        }
+        _ => Ok(auth_info.api_key.unwrap()),
+    }
+}
+
 pub(crate) fn generate_state() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
