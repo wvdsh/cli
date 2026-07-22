@@ -2,9 +2,7 @@ use crate::auth::{AuthManager, AuthSource};
 use crate::config;
 use anyhow::Result;
 use colored::Colorize;
-use serde::Deserialize;
 use serde_json::json;
-use std::collections::BTreeMap;
 use std::io::IsTerminal;
 
 /// A single kind of playtest data that can be wiped for a game.
@@ -113,33 +111,13 @@ fn is_non_interactive() -> bool {
     ci || !std::io::stdin().is_terminal()
 }
 
-#[derive(Debug, Deserialize)]
-struct ClearResult {
-    /// Per-category result, keyed by the category's `api_key`. Values are counts
-    /// (numbers) for synchronous deletes, or a status string like "scheduled"
-    /// for asynchronous ones (cloud saves).
-    #[serde(default)]
-    cleared: BTreeMap<String, serde_json::Value>,
-}
-
-/// Render a category's reported result. Numbers print as-is, strings print
-/// verbatim (e.g. "scheduled"), and a missing entry falls back to 0.
-fn render_result(value: Option<&serde_json::Value>) -> String {
-    match value {
-        Some(serde_json::Value::Number(n)) => n.to_string(),
-        Some(serde_json::Value::String(s)) => s.clone(),
-        Some(other) => other.to_string(),
-        None => "0".to_string(),
-    }
-}
-
 pub async fn handle_clear_playtest_data(args: ClearPlaytestDataArgs<'_>) -> Result<()> {
     let api_key = require_api_key()?;
     let categories = args.categories();
 
     let category_labels = categories
         .iter()
-        .map(|c| format!("\n - {}", c.label()))
+        .map(|c| format!("\n {} {}", "•".dimmed(), c.label()))
         .collect::<String>();
 
     let scope = match args.username {
@@ -193,27 +171,17 @@ pub async fn handle_clear_playtest_data(args: ClearPlaytestDataArgs<'_>) -> Resu
         .send()
         .await?;
 
-    let resp = config::check_api_response(resp).await?;
+    // A 2xx means the deletion was scheduled. Deletion now runs asynchronously in
+    // the background (self-scheduling batch sweeps drain over follow-up
+    // transactions)
+    config::check_api_response(resp).await?;
 
-    // A 2xx already means the clear succeeded; the per-category counts are a
-    // best-effort summary, so fall back to a plain message if they're absent.
-    match resp.json::<ClearResult>().await {
-        Ok(result) if !result.cleared.is_empty() => {
-            println!(
-                "✓ Cleared playtest data for {} in game {}:",
-                scope, args.game_id
-            );
-            for cat in &categories {
-                let rendered = render_result(result.cleared.get(cat.api_key()));
-                println!("  {} {}: {}", "•".dimmed(), cat.label(), rendered);
-            }
-        }
-        _ => {
-            println!(
-                "✓ Cleared {}\nfor {} in game {}.",
-                category_labels, scope, args.game_id
-            );
-        }
+    println!(
+        "✓ Scheduled deletion of playtest data for {} in game {}:",
+        scope, args.game_id
+    );
+    for cat in &categories {
+        println!("  {} {}", "•".dimmed(), cat.label());
     }
 
     Ok(())
