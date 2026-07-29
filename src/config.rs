@@ -145,6 +145,26 @@ pub async fn check_api_response(response: reqwest::Response) -> Result<reqwest::
     anyhow::bail!("API request failed ({}): {}", status, body);
 }
 
+/// Env vars that override their `wavedash.toml` counterparts, so a committed
+/// config can act as the default while CI varies the game, output directory, or
+/// engine version per job. A set-but-blank value counts as unset — an
+/// unpopulated CI variable shouldn't wipe out a value the config file supplies.
+pub const ENV_GAME_ID: &str = "WAVEDASH_GAME_ID";
+pub const ENV_UPLOAD_DIR: &str = "WAVEDASH_UPLOAD_DIR";
+pub const ENV_ENTRYPOINT: &str = "WAVEDASH_ENTRYPOINT";
+pub const ENV_GODOT_VERSION: &str = "WAVEDASH_GODOT_VERSION";
+pub const ENV_UNITY_VERSION: &str = "WAVEDASH_UNITY_VERSION";
+
+/// Trim an override and treat a blank one as absent.
+fn non_blank(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn env_override(name: &str) -> Option<String> {
+    std::env::var(name).ok().and_then(non_blank)
+}
+
 #[derive(Debug, Deserialize)]
 pub struct GodotSection {
     pub version: String,
@@ -207,16 +227,18 @@ impl EngineKind {
     }
 }
 
-/// Resolve a game_id by preferring the CLI-provided value, otherwise loading
-/// `game_id` from the wavedash.toml at `config_path`. Errors include the
-/// config path so the user knows which file we tried to read.
+/// Resolve a game_id by preferring the CLI-provided value (which clap also
+/// fills from `WAVEDASH_GAME_ID`), otherwise loading `game_id` from the
+/// wavedash.toml at `config_path`. Errors include the config path so the user
+/// knows which file we tried to read.
 pub fn resolve_game_id(cli_game_id: Option<&str>, config_path: &PathBuf) -> Result<String> {
     if let Some(id) = cli_game_id {
         return Ok(id.to_string());
     }
     let config = WavedashConfig::load(config_path).map_err(|e| {
         anyhow::anyhow!(
-            "No --game-id provided and could not read game_id from {}: {}",
+            "No --game-id or {} provided, and could not read game_id from {}: {}",
+            ENV_GAME_ID,
             config_path.display(),
             e
         )
@@ -234,10 +256,83 @@ impl WavedashConfig {
             )
         })?;
 
-        let config: WavedashConfig = toml::from_str(&config_content)
+        let mut config: WavedashConfig = toml::from_str(&config_content)
             .map_err(|e| anyhow::anyhow!("Failed to parse config file: {}", e))?;
 
+        config.apply_env_overrides(env_override)?;
+
         Ok(config)
+    }
+
+    /// Layer the `WAVEDASH_*` overrides on top of what the config file parsed to.
+    /// `lookup` is injected so tests don't have to mutate the process environment.
+    fn apply_env_overrides(&mut self, lookup: impl Fn(&str) -> Option<String>) -> Result<()> {
+        if let Some(game_id) = lookup(ENV_GAME_ID) {
+            self.game_id = game_id;
+        }
+        // Relative values resolve against the config file's directory, same as a
+        // relative upload_dir in the toml; absolute ones win outright, since
+        // that's how the callers' `config_dir.join(..)` already behaves.
+        if let Some(upload_dir) = lookup(ENV_UPLOAD_DIR) {
+            self.upload_dir = PathBuf::from(upload_dir);
+        }
+        if let Some(entrypoint) = lookup(ENV_ENTRYPOINT) {
+            self.entrypoint = Some(entrypoint);
+        }
+
+        match (lookup(ENV_GODOT_VERSION), lookup(ENV_UNITY_VERSION)) {
+            (Some(_), Some(_)) => anyhow::bail!(
+                "{} and {} are both set, but a build targets a single engine. Unset whichever doesn't apply.",
+                ENV_GODOT_VERSION,
+                ENV_UNITY_VERSION
+            ),
+            (Some(version), None) => {
+                if let Some(godot) = &mut self.godot {
+                    godot.version = version;
+                } else {
+                    self.reject_engine_conflict(ENV_GODOT_VERSION)?;
+                    self.godot = Some(GodotSection { version });
+                }
+            }
+            (None, Some(version)) => {
+                if let Some(unity) = &mut self.unity {
+                    unity.version = version;
+                } else {
+                    self.reject_engine_conflict(ENV_UNITY_VERSION)?;
+                    self.unity = Some(UnitySection { version });
+                }
+            }
+            (None, None) => {}
+        }
+
+        Ok(())
+    }
+
+    /// An engine version override may introduce the section it names when the
+    /// config file declares no engine at all, but it must not switch engines
+    /// behind the user's back — that uploads a build the site can't boot, and
+    /// `engine_type()` would only report a vague "at most one engine" error.
+    fn reject_engine_conflict(&self, env_var: &str) -> Result<()> {
+        let declared = [
+            self.godot.is_some().then_some("[godot]"),
+            self.unity.is_some().then_some("[unity]"),
+            self.jsdos.is_some().then_some("[jsdos]"),
+            self.ruffle.is_some().then_some("[ruffle]"),
+            self.renpy.is_some().then_some("[renpy]"),
+        ]
+        .into_iter()
+        .flatten()
+        .next();
+
+        if let Some(section) = declared {
+            anyhow::bail!(
+                "{} is set, but the config file already declares {}. Remove one so the build targets a single engine.",
+                env_var,
+                section
+            );
+        }
+
+        Ok(())
     }
 
     pub fn engine_type(&self) -> Result<Option<EngineKind>> {
@@ -317,5 +412,122 @@ impl WavedashConfig {
             files.push(loader_url);
         }
         files
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Stand-in for the process environment, so these tests stay hermetic while
+    /// running on cargo's shared test threads.
+    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let vars: HashMap<String, String> = pairs
+            .iter()
+            .filter_map(|(name, value)| {
+                non_blank(value.to_string()).map(|value| (name.to_string(), value))
+            })
+            .collect();
+        move |name| vars.get(name).cloned()
+    }
+
+    fn parse(toml_str: &str) -> WavedashConfig {
+        toml::from_str(toml_str).expect("test config should parse")
+    }
+
+    const GODOT_CONFIG: &str = r#"
+        game_id = "from_file"
+        upload_dir = "build/web"
+
+        [godot]
+        version = "4.2"
+    "#;
+
+    const CUSTOM_CONFIG: &str = r#"
+        game_id = "from_file"
+        upload_dir = "dist"
+        entrypoint = "game.html"
+    "#;
+
+    #[test]
+    fn blank_overrides_are_treated_as_unset() {
+        assert_eq!(non_blank("  4.3 ".to_string()), Some("4.3".to_string()));
+        assert_eq!(non_blank("   ".to_string()), None);
+        assert_eq!(non_blank(String::new()), None);
+    }
+
+    #[test]
+    fn env_overrides_file_values() {
+        let mut config = parse(CUSTOM_CONFIG);
+        config
+            .apply_env_overrides(env(&[
+                (ENV_GAME_ID, "from_env"),
+                (ENV_UPLOAD_DIR, "out/web"),
+                (ENV_ENTRYPOINT, "start.html"),
+            ]))
+            .expect("overrides should apply");
+
+        assert_eq!(config.game_id, "from_env");
+        assert_eq!(config.upload_dir, PathBuf::from("out/web"));
+        assert_eq!(config.entrypoint(), Some("start.html"));
+    }
+
+    #[test]
+    fn file_values_survive_when_nothing_is_set() {
+        let mut config = parse(CUSTOM_CONFIG);
+        config
+            .apply_env_overrides(env(&[(ENV_GAME_ID, "  ")]))
+            .expect("blank override should be ignored");
+
+        assert_eq!(config.game_id, "from_file");
+        assert_eq!(config.upload_dir, PathBuf::from("dist"));
+        assert_eq!(config.entrypoint(), Some("game.html"));
+    }
+
+    #[test]
+    fn engine_version_override_replaces_existing_section_version() {
+        let mut config = parse(GODOT_CONFIG);
+        config
+            .apply_env_overrides(env(&[(ENV_GODOT_VERSION, "4.3")]))
+            .expect("godot override should apply");
+
+        assert_eq!(config.engine_type().unwrap(), Some(EngineKind::Godot));
+        assert_eq!(config.engine_version(), Some("4.3"));
+    }
+
+    #[test]
+    fn engine_version_override_adds_section_when_config_declares_no_engine() {
+        let mut config = parse("game_id = \"g\"\nupload_dir = \"dist\"\n");
+        config
+            .apply_env_overrides(env(&[(ENV_UNITY_VERSION, "2022.3")]))
+            .expect("unity override should apply");
+
+        assert_eq!(config.engine_type().unwrap(), Some(EngineKind::Unity));
+        assert_eq!(config.engine_version(), Some("2022.3"));
+    }
+
+    #[test]
+    fn engine_version_override_refuses_to_switch_engines() {
+        let mut config = parse(GODOT_CONFIG);
+        let err = config
+            .apply_env_overrides(env(&[(ENV_UNITY_VERSION, "2022.3")]))
+            .expect_err("unity override should conflict with [godot]");
+
+        assert!(err.to_string().contains("[godot]"), "got: {}", err);
+        assert_eq!(config.engine_version(), Some("4.2"));
+    }
+
+    #[test]
+    fn both_engine_version_overrides_is_an_error() {
+        let mut config = parse(GODOT_CONFIG);
+        let err = config
+            .apply_env_overrides(env(&[
+                (ENV_GODOT_VERSION, "4.3"),
+                (ENV_UNITY_VERSION, "2022.3"),
+            ]))
+            .expect_err("two engine versions should conflict");
+
+        assert!(err.to_string().contains(ENV_UNITY_VERSION), "got: {}", err);
     }
 }

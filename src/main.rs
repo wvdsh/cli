@@ -202,6 +202,7 @@ enum StatCommands {
     Create {
         #[arg(
             long = "game-id",
+            env = config::ENV_GAME_ID,
             help = "Game ID (defaults to game_id in wavedash.toml)"
         )]
         game_id: Option<String>,
@@ -221,6 +222,7 @@ enum StatCommands {
     Update {
         #[arg(
             long = "game-id",
+            env = config::ENV_GAME_ID,
             help = "Game ID (defaults to game_id in wavedash.toml)"
         )]
         game_id: Option<String>,
@@ -242,6 +244,7 @@ enum StatCommands {
     Delete {
         #[arg(
             long = "game-id",
+            env = config::ENV_GAME_ID,
             help = "Game ID (defaults to game_id in wavedash.toml)"
         )]
         game_id: Option<String>,
@@ -265,6 +268,7 @@ enum AchievementCommands {
     Create {
         #[arg(
             long = "game-id",
+            env = config::ENV_GAME_ID,
             help = "Game ID (defaults to game_id in wavedash.toml)"
         )]
         game_id: Option<String>,
@@ -303,6 +307,7 @@ enum AchievementCommands {
     Update {
         #[arg(
             long = "game-id",
+            env = config::ENV_GAME_ID,
             help = "Game ID (defaults to game_id in wavedash.toml)"
         )]
         game_id: Option<String>,
@@ -340,6 +345,7 @@ enum AchievementCommands {
     Delete {
         #[arg(
             long = "game-id",
+            env = config::ENV_GAME_ID,
             help = "Game ID (defaults to game_id in wavedash.toml)"
         )]
         game_id: Option<String>,
