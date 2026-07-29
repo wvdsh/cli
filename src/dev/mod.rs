@@ -77,7 +77,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
 
     let wavedash_config = WavedashConfig::load(&config_path)?;
     let config_dir = config_parent_dir(&config_path)?;
-    let upload_dir = config_dir.join(&wavedash_config.upload_dir);
+    let upload_dir = config_dir.join(wavedash_config.upload_dir());
     if !upload_dir.exists() || !upload_dir.is_dir() {
         anyhow::bail!(
             "Upload directory does not exist or is not a directory: {}",
@@ -128,7 +128,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
         }
     }
     let local_build = create_local_build(
-        &wavedash_config.game_id,
+        wavedash_config.game_id(),
         engine_kind.map(|e| e.as_label()),
         wavedash_config.engine_version(),
         entrypoint.as_deref(),

@@ -1,7 +1,9 @@
 use anyhow::Result;
+use colored::Colorize;
 use directories::BaseDirs;
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 /// Get the wavedash config directory (varies by environment)
 /// - Production: ~/.wavedash
@@ -165,6 +167,54 @@ fn env_override(name: &str) -> Option<String> {
     std::env::var(name).ok().and_then(non_blank)
 }
 
+/// A config value an override can change. Notices are keyed by field and
+/// announced the first time a command reads that field, so which overrides get
+/// mentioned follows from what the command actually uses — no per-command list
+/// to keep in sync.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Field {
+    GameId,
+    UploadDir,
+    Entrypoint,
+    Engine,
+}
+
+impl Field {
+    fn bit(self) -> u8 {
+        match self {
+            Field::GameId => 1 << 0,
+            Field::UploadDir => 1 << 1,
+            Field::Entrypoint => 1 << 2,
+            Field::Engine => 1 << 3,
+        }
+    }
+}
+
+/// Single place the notice prefix lives, since overrides get announced both from
+/// the config accessors and from `resolve_game_id`.
+fn print_override_notice(text: &str) {
+    println!("{} {}", "env override:".yellow(), text);
+}
+
+fn game_id_notice(value: &str) -> String {
+    format!("{} → game_id = {}", ENV_GAME_ID, value)
+}
+
+/// One line describing an engine version override. `added` marks the case where
+/// the config declared no engine, which is worth calling out separately: it
+/// decides the engine for the build rather than just its version.
+fn engine_notice(env_var: &str, section: &str, version: &str, added: bool) -> (Field, String) {
+    let text = if added {
+        format!(
+            "{} → [{}].version = {} (config declared no engine, so [{}] is now in play)",
+            env_var, section, version, section
+        )
+    } else {
+        format!("{} → [{}].version = {}", env_var, section, version)
+    };
+    (Field::Engine, text)
+}
+
 #[derive(Debug, Deserialize)]
 pub struct GodotSection {
     pub version: String,
@@ -184,26 +234,37 @@ pub struct ExecutableEngineSection {
     pub loader_url: Option<String>,
 }
 
+/// Fields are private so every read goes through an accessor — that's what makes
+/// override notices self-maintaining (see [`Field`]).
 #[derive(Debug, Deserialize)]
 pub struct WavedashConfig {
-    pub game_id: String,
-    pub upload_dir: PathBuf,
-    pub entrypoint: Option<String>,
+    game_id: String,
+    upload_dir: PathBuf,
+    entrypoint: Option<String>,
 
     #[serde(rename = "godot")]
-    pub godot: Option<GodotSection>,
+    godot: Option<GodotSection>,
 
     #[serde(rename = "unity")]
-    pub unity: Option<UnitySection>,
+    unity: Option<UnitySection>,
 
     #[serde(rename = "jsdos")]
-    pub jsdos: Option<ExecutableEngineSection>,
+    jsdos: Option<ExecutableEngineSection>,
 
     #[serde(rename = "ruffle")]
-    pub ruffle: Option<ExecutableEngineSection>,
+    ruffle: Option<ExecutableEngineSection>,
 
     #[serde(rename = "renpy")]
-    pub renpy: Option<ExecutableEngineSection>,
+    renpy: Option<ExecutableEngineSection>,
+
+    /// Overrides applied at load, announced lazily on first read of the field.
+    #[serde(skip)]
+    override_notices: Vec<(Field, String)>,
+
+    /// Bitmask of fields already announced. Atomic because the accessors take
+    /// `&self` and the config is shared across the async call graph.
+    #[serde(skip)]
+    announced: AtomicU8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -233,6 +294,14 @@ impl EngineKind {
 /// knows which file we tried to read.
 pub fn resolve_game_id(cli_game_id: Option<&str>, config_path: &PathBuf) -> Result<String> {
     if let Some(id) = cli_game_id {
+        // clap owns this flag and fills it from WAVEDASH_GAME_ID itself, before
+        // any config is read — so the accessors never see it and the notice has
+        // to come from here, or `stat`/`achievement` would apply the override
+        // silently. A typed flag that happens to match the env var is reported
+        // too; the two are indistinguishable here, and saying so is harmless.
+        if env_override(ENV_GAME_ID).as_deref() == Some(id) {
+            print_override_notice(&game_id_notice(id));
+        }
         return Ok(id.to_string());
     }
     let config = WavedashConfig::load(config_path).map_err(|e| {
@@ -243,7 +312,7 @@ pub fn resolve_game_id(cli_game_id: Option<&str>, config_path: &PathBuf) -> Resu
             e
         )
     })?;
-    Ok(config.game_id)
+    Ok(config.game_id().to_string())
 }
 
 impl WavedashConfig {
@@ -259,24 +328,67 @@ impl WavedashConfig {
         let mut config: WavedashConfig = toml::from_str(&config_content)
             .map_err(|e| anyhow::anyhow!("Failed to parse config file: {}", e))?;
 
-        config.apply_env_overrides(env_override)?;
+        // Not printed here: each notice waits until the command reads the field
+        // it applies to, so nothing is announced that can't affect this run.
+        let notices = config.apply_env_overrides(env_override)?;
+        config.override_notices = notices;
 
         Ok(config)
     }
 
+    /// Print the override notice for `field`, once, on first read.
+    fn announce(&self, field: Field) {
+        let bit = field.bit();
+        if self.announced.fetch_or(bit, Ordering::Relaxed) & bit != 0 {
+            return;
+        }
+        for (_, text) in self.override_notices.iter().filter(|(f, _)| *f == field) {
+            print_override_notice(text);
+        }
+    }
+
+    pub fn game_id(&self) -> &str {
+        self.announce(Field::GameId);
+        &self.game_id
+    }
+
+    pub fn upload_dir(&self) -> &PathBuf {
+        self.announce(Field::UploadDir);
+        &self.upload_dir
+    }
+
     /// Layer the `WAVEDASH_*` overrides on top of what the config file parsed to.
-    /// `lookup` is injected so tests don't have to mutate the process environment.
-    fn apply_env_overrides(&mut self, lookup: impl Fn(&str) -> Option<String>) -> Result<()> {
+    /// Returns one line per override applied, tagged with the commands it
+    /// affects, so a run that silently retargets a build says so. `lookup` is
+    /// injected so tests don't have to mutate the process environment.
+    fn apply_env_overrides(
+        &mut self,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Result<Vec<(Field, String)>> {
+        let mut notices = Vec::new();
+
         if let Some(game_id) = lookup(ENV_GAME_ID) {
+            notices.push((
+                Field::GameId,
+                game_id_notice(&game_id),
+            ));
             self.game_id = game_id;
         }
         // Relative values resolve against the config file's directory, same as a
         // relative upload_dir in the toml; absolute ones win outright, since
         // that's how the callers' `config_dir.join(..)` already behaves.
         if let Some(upload_dir) = lookup(ENV_UPLOAD_DIR) {
+            notices.push((
+                Field::UploadDir,
+                format!("{} → upload_dir = {}", ENV_UPLOAD_DIR, upload_dir),
+            ));
             self.upload_dir = PathBuf::from(upload_dir);
         }
         if let Some(entrypoint) = lookup(ENV_ENTRYPOINT) {
+            notices.push((
+                Field::Entrypoint,
+                format!("{} → entrypoint = {}", ENV_ENTRYPOINT, entrypoint),
+            ));
             self.entrypoint = Some(entrypoint);
         }
 
@@ -288,24 +400,28 @@ impl WavedashConfig {
             ),
             (Some(version), None) => {
                 if let Some(godot) = &mut self.godot {
+                    notices.push(engine_notice(ENV_GODOT_VERSION, "godot", &version, false));
                     godot.version = version;
                 } else {
                     self.reject_engine_conflict(ENV_GODOT_VERSION)?;
+                    notices.push(engine_notice(ENV_GODOT_VERSION, "godot", &version, true));
                     self.godot = Some(GodotSection { version });
                 }
             }
             (None, Some(version)) => {
                 if let Some(unity) = &mut self.unity {
+                    notices.push(engine_notice(ENV_UNITY_VERSION, "unity", &version, false));
                     unity.version = version;
                 } else {
                     self.reject_engine_conflict(ENV_UNITY_VERSION)?;
+                    notices.push(engine_notice(ENV_UNITY_VERSION, "unity", &version, true));
                     self.unity = Some(UnitySection { version });
                 }
             }
             (None, None) => {}
         }
 
-        Ok(())
+        Ok(notices)
     }
 
     /// An engine version override may introduce the section it names when the
@@ -367,24 +483,29 @@ impl WavedashConfig {
     }
 
     pub fn engine_version(&self) -> Option<&str> {
-        if let Some(godot) = &self.godot {
-            return Some(&godot.version);
+        let version = if let Some(godot) = &self.godot {
+            Some(godot.version.as_str())
+        } else if let Some(unity) = &self.unity {
+            Some(unity.version.as_str())
+        } else {
+            self.executable_section().map(|s| s.version.as_str())
+        };
+        // Only announce when a version is actually handed out — a config with no
+        // engine section can't be affected by an engine version override.
+        if version.is_some() {
+            self.announce(Field::Engine);
         }
-        if let Some(unity) = &self.unity {
-            return Some(&unity.version);
-        }
-        self.executable_section().map(|s| s.version.as_str())
+        version
     }
 
     /// Returns the entrypoint when no engine block is present.
     /// Uses the user-specified value from the config, or defaults to "index.html".
     pub fn entrypoint(&self) -> Option<&str> {
         match self.engine_type() {
-            Ok(None) => Some(
-                self.entrypoint
-                    .as_deref()
-                    .unwrap_or("index.html"),
-            ),
+            Ok(None) => {
+                self.announce(Field::Entrypoint);
+                Some(self.entrypoint.as_deref().unwrap_or("index.html"))
+            }
             _ => None,
         }
     }
@@ -432,6 +553,10 @@ mod tests {
         move |name| vars.get(name).cloned()
     }
 
+    fn texts(notices: &[(Field, String)]) -> Vec<&str> {
+        notices.iter().map(|(_, text)| text.as_str()).collect()
+    }
+
     fn parse(toml_str: &str) -> WavedashConfig {
         toml::from_str(toml_str).expect("test config should parse")
     }
@@ -460,7 +585,7 @@ mod tests {
     #[test]
     fn env_overrides_file_values() {
         let mut config = parse(CUSTOM_CONFIG);
-        config
+        let notices = config
             .apply_env_overrides(env(&[
                 (ENV_GAME_ID, "from_env"),
                 (ENV_UPLOAD_DIR, "out/web"),
@@ -471,40 +596,107 @@ mod tests {
         assert_eq!(config.game_id, "from_env");
         assert_eq!(config.upload_dir, PathBuf::from("out/web"));
         assert_eq!(config.entrypoint(), Some("start.html"));
+        assert_eq!(
+            texts(&notices),
+            vec![
+                "WAVEDASH_GAME_ID → game_id = from_env",
+                "WAVEDASH_UPLOAD_DIR → upload_dir = out/web",
+                "WAVEDASH_ENTRYPOINT → entrypoint = start.html",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_field_is_announced_on_first_read_and_only_that_field() {
+        let mut config = parse(GODOT_CONFIG);
+        config.override_notices = config
+            .apply_env_overrides(env(&[
+                (ENV_GAME_ID, "from_env"),
+                (ENV_UPLOAD_DIR, "out/web"),
+                (ENV_ENTRYPOINT, "start.html"),
+                (ENV_GODOT_VERSION, "4.3"),
+            ]))
+            .expect("overrides should apply");
+
+        // Nothing read yet, so nothing announced.
+        assert_eq!(config.announced.load(Ordering::Relaxed), 0);
+
+        // What `publish` does: read the game id and nothing else. Only that
+        // field is announced — the other three applied but stay quiet.
+        assert_eq!(config.game_id(), "from_env");
+        assert_eq!(config.announced.load(Ordering::Relaxed), Field::GameId.bit());
+
+        // Re-reading is a no-op: the bit is already set, so announce() returns early.
+        let _ = config.game_id();
+        assert_eq!(config.announced.load(Ordering::Relaxed), Field::GameId.bit());
+
+        // Reading the engine version brings in its notice too.
+        assert_eq!(config.engine_version(), Some("4.3"));
+        assert_eq!(
+            config.announced.load(Ordering::Relaxed),
+            Field::GameId.bit() | Field::Engine.bit()
+        );
+    }
+
+    #[test]
+    fn engine_field_stays_quiet_when_the_config_has_no_engine() {
+        let mut config = parse(CUSTOM_CONFIG);
+        config.override_notices = config
+            .apply_env_overrides(env(&[(ENV_GAME_ID, "from_env")]))
+            .expect("override should apply");
+
+        // No engine section and no version to hand out, so nothing to announce.
+        assert_eq!(config.engine_version(), None);
+        assert_eq!(config.announced.load(Ordering::Relaxed), 0);
     }
 
     #[test]
     fn file_values_survive_when_nothing_is_set() {
         let mut config = parse(CUSTOM_CONFIG);
-        config
+        let notices = config
             .apply_env_overrides(env(&[(ENV_GAME_ID, "  ")]))
             .expect("blank override should be ignored");
 
         assert_eq!(config.game_id, "from_file");
         assert_eq!(config.upload_dir, PathBuf::from("dist"));
         assert_eq!(config.entrypoint(), Some("game.html"));
+        assert!(
+            notices.is_empty(),
+            "nothing was overridden, so nothing should be announced: {:?}",
+            notices
+        );
     }
 
     #[test]
     fn engine_version_override_replaces_existing_section_version() {
         let mut config = parse(GODOT_CONFIG);
-        config
+        let notices = config
             .apply_env_overrides(env(&[(ENV_GODOT_VERSION, "4.3")]))
             .expect("godot override should apply");
 
         assert_eq!(config.engine_type().unwrap(), Some(EngineKind::Godot));
         assert_eq!(config.engine_version(), Some("4.3"));
+        assert_eq!(
+            texts(&notices),
+            vec!["WAVEDASH_GODOT_VERSION → [godot].version = 4.3"]
+        );
     }
 
     #[test]
     fn engine_version_override_adds_section_when_config_declares_no_engine() {
         let mut config = parse("game_id = \"g\"\nupload_dir = \"dist\"\n");
-        config
+        let notices = config
             .apply_env_overrides(env(&[(ENV_UNITY_VERSION, "2022.3")]))
             .expect("unity override should apply");
 
         assert_eq!(config.engine_type().unwrap(), Some(EngineKind::Unity));
         assert_eq!(config.engine_version(), Some("2022.3"));
+        assert_eq!(notices.len(), 1);
+        assert!(
+            notices[0].1.contains("config declared no engine"),
+            "adding a section should say so: {}",
+            notices[0].1
+        );
     }
 
     #[test]

@@ -118,7 +118,7 @@ pub async fn handle_publish(args: PublishArgs) -> Result<()> {
     let api_host = config::get("api_host")?;
     let url = format!(
         "{}/api/games/{}/builds/{}/publish",
-        api_host, wavedash_config.game_id, build_id
+        api_host, wavedash_config.game_id(), build_id
     );
 
     let notes = build_release_notes(title, summary, added, removed, fixed, adjusted);
