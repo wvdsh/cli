@@ -67,17 +67,13 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
         }
     }
 
+    // No existence check of its own: `load` reports a missing file (naming
+    // --config and `wavedash init`), and letting it decide is what keeps `dev`
+    // runnable from overrides alone like every other command.
     let config_path = config_path.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
-    if !config_path.exists() {
-        anyhow::bail!(
-            "Unable to find config file at {}. Pass --config if it's located elsewhere.",
-            config_path.display()
-        );
-    }
-
     let wavedash_config = WavedashConfig::load(&config_path)?;
     let config_dir = config_parent_dir(&config_path)?;
-    let upload_dir = config_dir.join(wavedash_config.upload_dir());
+    let upload_dir = config_dir.join(wavedash_config.upload_dir()?);
     if !upload_dir.exists() || !upload_dir.is_dir() {
         anyhow::bail!(
             "Upload directory does not exist or is not a directory: {}",
@@ -128,7 +124,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
         }
     }
     let local_build = create_local_build(
-        wavedash_config.game_id(),
+        wavedash_config.game_id()?,
         engine_kind.map(|e| e.as_label()),
         wavedash_config.engine_version(),
         entrypoint.as_deref(),

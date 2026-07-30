@@ -27,6 +27,7 @@ struct Credentials {
     email: Option<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum AuthSource {
     Environment,
     File,
@@ -118,24 +119,42 @@ impl AuthManager {
     }
 
     pub fn get_auth_info(&self) -> AuthInfo {
-        // Check environment first
-        if let Ok(api_key) = std::env::var("WAVEDASH_TOKEN") {
-            if !api_key.is_empty() {
-                return AuthInfo {
-                    source: AuthSource::Environment,
-                    api_key: Some(api_key),
-                    email: None, // No email available from env var
-                };
-            }
+        Self::resolve_auth(
+            std::env::var(config::ENV_TOKEN).ok(),
+            self.read_file_credentials(),
+        )
+    }
+
+    /// Precedence and blank handling, split out from [`Self::get_auth_info`] so
+    /// it's testable without mutating the process environment or reading the
+    /// real credentials file.
+    ///
+    /// Blank counts as unset, the same rule every other `WAVEDASH_*` variable
+    /// follows: an unpopulated CI secret falls back to stored credentials rather
+    /// than being sent as a bare `Bearer `, which returns a 401 telling the user
+    /// to run an interactive login they can't run. Trimming matters just as
+    /// much — a `WAVEDASH_TOKEN=$(cat key)` trailing newline is not a valid
+    /// header value, and reqwest rejects it as "failed to parse header value"
+    /// with nothing to say it was the token.
+    fn resolve_auth(env_token: Option<String>, file: Option<Credentials>) -> AuthInfo {
+        if let Some(api_key) = env_token.and_then(config::non_blank) {
+            return AuthInfo {
+                source: AuthSource::Environment,
+                api_key: Some(api_key),
+                email: None, // No email available from env var
+            };
         }
 
-        // Check file
-        if let Some(creds) = self.read_file_credentials() {
-            return AuthInfo {
-                source: AuthSource::File,
-                api_key: Some(creds.api_key),
-                email: creds.email,
-            };
+        // A blank key on disk is a corrupt or half-written credentials file, and
+        // is no more usable than a blank variable.
+        if let Some(creds) = file {
+            if let Some(api_key) = config::non_blank(creds.api_key) {
+                return AuthInfo {
+                    source: AuthSource::File,
+                    api_key: Some(api_key),
+                    email: creds.email,
+                };
+            }
         }
 
         AuthInfo {
@@ -495,6 +514,63 @@ pub async fn login_with_browser() -> Result<LoginResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stored(api_key: &str) -> Option<Credentials> {
+        Some(Credentials {
+            api_key: api_key.to_string(),
+            email: Some("dev@wavedash.com".to_string()),
+        })
+    }
+
+    #[test]
+    fn env_token_wins_over_stored_credentials() {
+        let info = AuthManager::resolve_auth(Some("from_env".into()), stored("from_file"));
+
+        assert_eq!(info.source, AuthSource::Environment);
+        assert_eq!(info.api_key.as_deref(), Some("from_env"));
+    }
+
+    /// The CI shape: an unpopulated secret expands to "", which must not shadow
+    /// the stored credentials or be sent as a bare `Bearer `.
+    #[test]
+    fn a_blank_env_token_falls_back_to_stored_credentials() {
+        for blank in ["", "   ", "\t", "\n"] {
+            let info = AuthManager::resolve_auth(Some(blank.into()), stored("from_file"));
+
+            assert_eq!(info.source, AuthSource::File, "blank: {:?}", blank);
+            assert_eq!(info.api_key.as_deref(), Some("from_file"));
+        }
+    }
+
+    #[test]
+    fn a_blank_env_token_with_nothing_stored_is_unauthenticated() {
+        let info = AuthManager::resolve_auth(Some("   ".into()), None);
+
+        assert_eq!(info.source, AuthSource::None);
+        assert!(info.api_key.is_none());
+    }
+
+    /// `WAVEDASH_TOKEN=$(cat key.txt)` keeps the trailing newline, which is not a
+    /// legal header value — trim it here rather than fail opaquely at send time.
+    #[test]
+    fn an_env_token_is_trimmed_so_it_survives_becoming_a_header() {
+        let info = AuthManager::resolve_auth(Some("  wdcli_abc123\n".into()), None);
+
+        assert_eq!(info.api_key.as_deref(), Some("wdcli_abc123"));
+        assert!(reqwest::header::HeaderValue::from_str(&format!(
+            "Bearer {}",
+            info.api_key.unwrap()
+        ))
+        .is_ok());
+    }
+
+    #[test]
+    fn a_blank_stored_key_is_unauthenticated() {
+        let info = AuthManager::resolve_auth(None, stored("  "));
+
+        assert_eq!(info.source, AuthSource::None);
+        assert!(info.api_key.is_none());
+    }
 
     #[test]
     fn derives_rfc7636_s256_pkce_challenge() {

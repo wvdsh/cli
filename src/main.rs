@@ -38,6 +38,11 @@ fn mask_token(token: &str) -> String {
     }
 }
 
+/// Rejects a blank value the user typed. Only ever sees typed values — no `#[arg]`
+/// using it is wired to clap's `env`, deliberately: clap feeds a set-but-blank
+/// variable to the value parser for `Option<String>` args, which would turn an
+/// unpopulated CI variable into a usage error instead of the "counts as unset"
+/// the overrides promise. Blank env vars are handled in `config`.
 fn parse_non_empty_arg(value: &str) -> Result<String, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -202,9 +207,8 @@ enum StatCommands {
     Create {
         #[arg(
             long = "game-id",
-            env = config::ENV_GAME_ID,
             value_parser = parse_non_empty_arg,
-            help = "Game ID (defaults to game_id in wavedash.toml)"
+            help = "Game ID (defaults to WAVEDASH_GAME_ID, then game_id in wavedash.toml)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -223,9 +227,8 @@ enum StatCommands {
     Update {
         #[arg(
             long = "game-id",
-            env = config::ENV_GAME_ID,
             value_parser = parse_non_empty_arg,
-            help = "Game ID (defaults to game_id in wavedash.toml)"
+            help = "Game ID (defaults to WAVEDASH_GAME_ID, then game_id in wavedash.toml)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -246,9 +249,8 @@ enum StatCommands {
     Delete {
         #[arg(
             long = "game-id",
-            env = config::ENV_GAME_ID,
             value_parser = parse_non_empty_arg,
-            help = "Game ID (defaults to game_id in wavedash.toml)"
+            help = "Game ID (defaults to WAVEDASH_GAME_ID, then game_id in wavedash.toml)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -271,9 +273,8 @@ enum AchievementCommands {
     Create {
         #[arg(
             long = "game-id",
-            env = config::ENV_GAME_ID,
             value_parser = parse_non_empty_arg,
-            help = "Game ID (defaults to game_id in wavedash.toml)"
+            help = "Game ID (defaults to WAVEDASH_GAME_ID, then game_id in wavedash.toml)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -311,9 +312,8 @@ enum AchievementCommands {
     Update {
         #[arg(
             long = "game-id",
-            env = config::ENV_GAME_ID,
             value_parser = parse_non_empty_arg,
-            help = "Game ID (defaults to game_id in wavedash.toml)"
+            help = "Game ID (defaults to WAVEDASH_GAME_ID, then game_id in wavedash.toml)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -350,9 +350,8 @@ enum AchievementCommands {
     Delete {
         #[arg(
             long = "game-id",
-            env = config::ENV_GAME_ID,
             value_parser = parse_non_empty_arg,
-            help = "Game ID (defaults to game_id in wavedash.toml)"
+            help = "Game ID (defaults to WAVEDASH_GAME_ID, then game_id in wavedash.toml)"
         )]
         game_id: Option<String>,
         #[arg(
