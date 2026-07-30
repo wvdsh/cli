@@ -174,7 +174,7 @@ pub async fn handle_build_push(
             engine: engine_kind.map(|e| e.as_label()),
             engine_version: wavedash_config.engine_version()?,
             entrypoint: wavedash_config.entrypoint()?,
-            entrypoint_params: wavedash_config.executable_entrypoint_params(),
+            entrypoint_params: wavedash_config.executable_entrypoint_params()?,
             message: message.as_deref(),
             build_size_bytes: total_bytes,
         },

@@ -322,23 +322,41 @@ fn shadowed_entrypoint_notice(entrypoint: &str, section: &str) -> String {
     )
 }
 
+/// Engine sections hold their fields as `Option` for the same reason `game_id`
+/// does: blank is unset here too (see
+/// [`WavedashConfig::treat_blank_file_values_as_unset`]), and "unset" has no
+/// answer until something reads it. A section that names an engine without
+/// saying which version therefore reaches the accessor that wants the version,
+/// rather than failing the parse for every command including the ones that never
+/// ask what engine this is.
 #[derive(Debug, Deserialize)]
 pub struct GodotSection {
-    pub version: String,
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UnitySection {
-    pub version: String,
+    pub version: Option<String>,
 }
 
 /// Shape for engines whose runtime is fetched as a single executable file
 /// (plus an optional loader script). Used by JSDOS, Ruffle, and Ren'Py.
 #[derive(Debug, Deserialize)]
 pub struct ExecutableEngineSection {
-    pub version: String,
-    pub executable: String,
+    pub version: Option<String>,
+    pub executable: Option<String>,
     pub loader_url: Option<String>,
+}
+
+impl ExecutableEngineSection {
+    fn treat_blank_values_as_unset(&mut self) {
+        self.version = self.version.take().and_then(non_blank);
+        self.executable = self.executable.take().and_then(non_blank);
+        // A blank `loader_url` would otherwise be validated as a file (and
+        // `upload_dir.join("")` is the directory itself, which exists) and then
+        // sent to the API as an empty `loaderUrl` for the shell to fetch.
+        self.loader_url = self.loader_url.take().and_then(non_blank);
+    }
 }
 
 /// The resolved project layer: `wavedash.toml` plus `WAVEDASH_*` overrides, with
@@ -411,8 +429,9 @@ pub enum EntrypointSource {
 }
 
 /// An engine section as the config file declares it: kind, toml section name, and
-/// the version written there.
-type DeclaredEngine<'a> = (EngineKind, &'static str, &'a str);
+/// the version written there — `None` when the section named the engine but not a
+/// version, which only matters if no override supplies one.
+type DeclaredEngine<'a> = (EngineKind, &'static str, Option<&'a str>);
 
 /// The engine a build targets, once [`WavedashConfig::active_engine`] has settled
 /// the file and the version overrides against each other. `override_var` and
@@ -437,6 +456,17 @@ pub enum EngineKind {
 }
 
 impl EngineKind {
+    /// The variable that can set this engine's version, for the two engines that
+    /// have one. `None` for the executable-style engines — see
+    /// [`WavedashConfig::executable_section`].
+    fn version_override_var(&self) -> Option<&'static str> {
+        match self {
+            EngineKind::Godot => Some(ENV_GODOT_VERSION),
+            EngineKind::Unity => Some(ENV_UNITY_VERSION),
+            EngineKind::JsDos | EngineKind::Ruffle | EngineKind::RenPy => None,
+        }
+    }
+
     pub fn as_label(&self) -> &'static str {
         match self {
             EngineKind::Godot => "GODOT",
@@ -553,6 +583,13 @@ impl WavedashConfig {
     /// stages the whole project — source, dotfiles and all — with no warning.
     /// `game_id = ""` builds a URL with an empty path segment. Unsetting both
     /// turns each into the missing-field error the accessors already have.
+    ///
+    /// Engine sections get the same treatment, field by field rather than by
+    /// dropping the section: `[godot]` with a blank version still means the file
+    /// declares Godot, so `WAVEDASH_GODOT_VERSION` still fills in the version it
+    /// left out and `WAVEDASH_UNITY_VERSION` is still refused as an engine
+    /// switch. Dropping the section would silently allow both, and would leave a
+    /// build with no engine at all rather than a message.
     fn treat_blank_file_values_as_unset(&mut self) {
         self.game_id = self.game_id.take().and_then(non_blank);
         self.entrypoint = self.entrypoint.take().and_then(non_blank);
@@ -564,6 +601,19 @@ impl WavedashConfig {
             .take()
             .and_then(|dir| non_blank(dir.to_string_lossy().into_owned()))
             .map(PathBuf::from);
+
+        if let Some(godot) = &mut self.godot {
+            godot.version = godot.version.take().and_then(non_blank);
+        }
+        if let Some(unity) = &mut self.unity {
+            unity.version = unity.version.take().and_then(non_blank);
+        }
+        for section in [&mut self.jsdos, &mut self.ruffle, &mut self.renpy]
+            .into_iter()
+            .flatten()
+        {
+            section.treat_blank_values_as_unset();
+        }
     }
 
     /// True the first time it's asked about `field`, so an accessor that resolved
@@ -592,6 +642,28 @@ impl WavedashConfig {
                 self.config_path.display(),
                 env_var
             )
+        }
+    }
+
+    /// Error for a field an engine section left out — written blank or not
+    /// written at all, which mean the same thing. Always about the file, since a
+    /// section can only come from one; the variable is only mentioned where one
+    /// exists to mention.
+    fn missing_engine_field(&self, kind: EngineKind, section: &str, field: &str) -> anyhow::Error {
+        match kind.version_override_var().filter(|_| field == "version") {
+            Some(env_var) => anyhow::anyhow!(
+                "[{}] has no {}. Add it to {} or set {}.",
+                section,
+                field,
+                self.config_path.display(),
+                env_var
+            ),
+            None => anyhow::anyhow!(
+                "[{}] has no {}. Add it to {}.",
+                section,
+                field,
+                self.config_path.display()
+            ),
         }
     }
 
@@ -633,19 +705,19 @@ impl WavedashConfig {
         let declared: Vec<DeclaredEngine<'_>> = [
             self.godot
                 .as_ref()
-                .map(|s| (EngineKind::Godot, "godot", s.version.as_str())),
+                .map(|s| (EngineKind::Godot, "godot", s.version.as_deref())),
             self.unity
                 .as_ref()
-                .map(|s| (EngineKind::Unity, "unity", s.version.as_str())),
+                .map(|s| (EngineKind::Unity, "unity", s.version.as_deref())),
             self.jsdos
                 .as_ref()
-                .map(|s| (EngineKind::JsDos, "jsdos", s.version.as_str())),
+                .map(|s| (EngineKind::JsDos, "jsdos", s.version.as_deref())),
             self.ruffle
                 .as_ref()
-                .map(|s| (EngineKind::Ruffle, "ruffle", s.version.as_str())),
+                .map(|s| (EngineKind::Ruffle, "ruffle", s.version.as_deref())),
             self.renpy
                 .as_ref()
-                .map(|s| (EngineKind::RenPy, "renpy", s.version.as_str())),
+                .map(|s| (EngineKind::RenPy, "renpy", s.version.as_deref())),
         ]
         .into_iter()
         .flatten()
@@ -688,10 +760,12 @@ impl WavedashConfig {
         match (overridden, declared) {
             // Nothing overridden, so the file decides — or nothing does.
             (None, None) => Ok(None),
+            // The file decides, so the file has to have said which version.
             (None, Some((kind, section, version))) => Ok(Some(ActiveEngine {
                 kind,
                 section,
-                version,
+                version: version
+                    .ok_or_else(|| self.missing_engine_field(kind, section, "version"))?,
                 override_var: None,
                 added_section: false,
             })),
@@ -773,11 +847,16 @@ impl WavedashConfig {
     /// for aren't part of the engine resolution at all. Adding a
     /// `WAVEDASH_JSDOS_VERSION`/`_RUFFLE_`/`_RENPY_` override means giving them a
     /// branch in `active_engine()` instead.
-    fn executable_section(&self) -> Option<&ExecutableEngineSection> {
+    fn executable_section(&self) -> Option<(EngineKind, &'static str, &ExecutableEngineSection)> {
         self.jsdos
             .as_ref()
-            .or(self.ruffle.as_ref())
-            .or(self.renpy.as_ref())
+            .map(|s| (EngineKind::JsDos, "jsdos", s))
+            .or_else(|| {
+                self.ruffle
+                    .as_ref()
+                    .map(|s| (EngineKind::Ruffle, "ruffle", s))
+            })
+            .or_else(|| self.renpy.as_ref().map(|s| (EngineKind::RenPy, "renpy", s)))
     }
 
     /// The active engine's version: the override that named it, else the version
@@ -839,29 +918,46 @@ impl WavedashConfig {
         }))
     }
 
+    /// The file the section says to boot, which it has to have said. `Err` rather
+    /// than a silent omission because the build the API would take without it
+    /// boots an executable-engine shell pointed at nothing.
+    fn executable<'a>(
+        &self,
+        kind: EngineKind,
+        section: &'static str,
+        engine: &'a ExecutableEngineSection,
+    ) -> Result<&'a str> {
+        engine
+            .executable
+            .as_deref()
+            .ok_or_else(|| self.missing_engine_field(kind, section, "executable"))
+    }
+
     /// For executable-style engines (JSDOS/Ruffle/Ren'Py), returns the
     /// entrypointParams (executable + optional loader_url).
-    pub fn executable_entrypoint_params(&self) -> Option<serde_json::Value> {
-        self.executable_section().map(|s| {
-            let mut params = serde_json::json!({ "executable": s.executable });
-            if let Some(loader_url) = &s.loader_url {
-                params["loaderUrl"] = serde_json::json!(loader_url);
-            }
-            params
-        })
+    pub fn executable_entrypoint_params(&self) -> Result<Option<serde_json::Value>> {
+        let Some((kind, section, engine)) = self.executable_section() else {
+            return Ok(None);
+        };
+        let mut params =
+            serde_json::json!({ "executable": self.executable(kind, section, engine)? });
+        if let Some(loader_url) = &engine.loader_url {
+            params["loaderUrl"] = serde_json::json!(loader_url);
+        }
+        Ok(Some(params))
     }
 
     /// For executable-style engines (JSDOS/Ruffle/Ren'Py), returns all files
     /// that must exist in upload_dir.
-    pub fn executable_files_to_validate(&self) -> Vec<&str> {
-        let Some(s) = self.executable_section() else {
-            return Vec::new();
+    pub fn executable_files_to_validate(&self) -> Result<Vec<&str>> {
+        let Some((kind, section, engine)) = self.executable_section() else {
+            return Ok(Vec::new());
         };
-        let mut files = vec![s.executable.as_str()];
-        if let Some(loader_url) = &s.loader_url {
+        let mut files = vec![self.executable(kind, section, engine)?];
+        if let Some(loader_url) = &engine.loader_url {
             files.push(loader_url);
         }
-        files
+        Ok(files)
     }
 }
 
@@ -1496,7 +1592,7 @@ mod tests {
             // An engine build, so there's no entrypoint to hand out.
             assert_eq!(config.entrypoint().unwrap(), None, "[{}]", section);
             assert_eq!(
-                config.executable_files_to_validate(),
+                config.executable_files_to_validate().unwrap(),
                 vec!["game.exe"],
                 "[{}]",
                 section
@@ -1546,5 +1642,119 @@ mod tests {
         assert!(config.engine_version().is_err());
         assert!(config.entrypoint().is_err());
         assert_eq!(config.game_id().unwrap(), "g");
+    }
+
+    /// The last place blank wasn't unset. A templated `version = "${GODOT}"` that
+    /// expanded to nothing used to be handed to the API as the build's engine
+    /// version, and used to build a play URL for version "" in `dev`. Written
+    /// blank and not written at all are the same thing, and both are reported
+    /// when something asks what version this build targets — not before.
+    #[test]
+    fn a_blank_engine_version_is_no_version() {
+        for section in [
+            "[godot]\nversion = \"\"",
+            "[godot]\nversion = \"  \"",
+            "[godot]",
+        ] {
+            let toml = format!("game_id = \"g\"\nupload_dir = \"dist\"\n\n{}\n", section);
+            let config = from_file(&toml, overrides(&[]));
+
+            let err = config
+                .engine_version()
+                .expect_err(&format!("{:?} supplies no version", section));
+            assert!(
+                err.to_string().contains("[godot] has no version")
+                    && err.to_string().contains(ENV_GODOT_VERSION),
+                "got: {}",
+                err
+            );
+            // Same answer whichever engine read asks.
+            assert!(config.engine_type().is_err(), "{:?}", section);
+            assert!(config.entrypoint().is_err(), "{:?}", section);
+            // And still nothing a command that never asks has to care about.
+            assert_eq!(config.game_id().unwrap(), "g", "{:?}", section);
+        }
+    }
+
+    /// Why the blank is unset field-by-field rather than by dropping the section:
+    /// the file still declares Godot, so the override fills in the version the
+    /// section left out — it doesn't bring an engine into play that was already
+    /// there, which is what the notice would say if the section had been dropped.
+    #[test]
+    fn a_version_override_supplies_what_a_blank_section_left_out() {
+        let config = from_file(
+            "game_id = \"g\"\nupload_dir = \"dist\"\nentrypoint = \"game.html\"\n\n[godot]\nversion = \"\"\n",
+            overrides(&[(ENV_GODOT_VERSION, "4.3")]),
+        );
+
+        assert_eq!(config.engine_type().unwrap(), Some(EngineKind::Godot));
+        assert_eq!(config.engine_version().unwrap(), Some("4.3"));
+        assert_eq!(
+            config.engine_notices(&active(&config)),
+            vec!["WAVEDASH_GODOT_VERSION → [godot].version = 4.3"]
+        );
+    }
+
+    /// The other half of that: a dropped section would have let the *other*
+    /// engine's override quietly retarget the build.
+    #[test]
+    fn a_blank_engine_section_still_refuses_an_engine_switch() {
+        let config = from_file(
+            "game_id = \"g\"\nupload_dir = \"dist\"\n\n[godot]\nversion = \"\"\n",
+            overrides(&[(ENV_UNITY_VERSION, "2022.3")]),
+        );
+
+        let err = config
+            .engine_type()
+            .expect_err("the file still declares godot");
+        assert!(
+            err.to_string().contains("[godot]") && err.to_string().contains(ENV_UNITY_VERSION),
+            "got: {}",
+            err
+        );
+    }
+
+    /// No override can supply an executable, so a blank one is only ever the
+    /// file's omission — reported rather than sent as an empty `executable` for
+    /// the shell to boot. The path it would otherwise be validated as is
+    /// `upload_dir.join("")`, which is the directory, which exists.
+    #[test]
+    fn a_blank_executable_is_no_executable() {
+        let config = from_file(
+            "game_id = \"g\"\nupload_dir = \"dist\"\n\n[jsdos]\nversion = \"8.x\"\nexecutable = \"  \"\n",
+            overrides(&[]),
+        );
+
+        for err in [
+            config.executable_files_to_validate().unwrap_err(),
+            config.executable_entrypoint_params().unwrap_err(),
+        ] {
+            assert!(
+                err.to_string().contains("[jsdos] has no executable"),
+                "got: {}",
+                err
+            );
+            // There's no WAVEDASH_JSDOS_EXECUTABLE to point at.
+            assert!(!err.to_string().contains("set WAVEDASH"), "got: {}", err);
+        }
+        // The version was there, so that read is unaffected.
+        assert_eq!(config.engine_version().unwrap(), Some("8.x"));
+    }
+
+    #[test]
+    fn a_blank_loader_url_is_no_loader_url() {
+        let config = from_file(
+            "game_id = \"g\"\nupload_dir = \"dist\"\n\n[ruffle]\nversion = \"0.1\"\nexecutable = \"game.swf\"\nloader_url = \"\"\n",
+            overrides(&[]),
+        );
+
+        assert_eq!(
+            config.executable_files_to_validate().unwrap(),
+            vec!["game.swf"]
+        );
+        assert_eq!(
+            config.executable_entrypoint_params().unwrap(),
+            Some(serde_json::json!({ "executable": "game.swf" }))
+        );
     }
 }

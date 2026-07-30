@@ -237,7 +237,7 @@ async fn resolve_engine_entry(
             fetch_entrypoint_params(&html, kind, version, api_host, client).await?
         }
         // Params come straight from wavedash.toml, same as `wavedash push`.
-        _ => wavedash_config.executable_entrypoint_params().ok_or_else(|| {
+        _ => wavedash_config.executable_entrypoint_params()?.ok_or_else(|| {
             anyhow::anyhow!("Missing executable config in wavedash.toml for {}", kind.as_label())
         })?,
     };
