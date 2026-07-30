@@ -1475,6 +1475,63 @@ mod tests {
         assert!(err.to_string().contains("[godot]"), "got: {}", err);
     }
 
+    /// JSDOS/Ruffle/Ren'Py have no version override, so their version has to keep
+    /// coming off the file's own section — which `declared_engine` is responsible
+    /// for now, rather than the separate `executable_section` lookup it used to be.
+    #[test]
+    fn an_executable_engine_supplies_its_own_version() {
+        for (section, kind, label) in [
+            ("jsdos", EngineKind::JsDos, "JSDOS"),
+            ("ruffle", EngineKind::Ruffle, "RUFFLE"),
+            ("renpy", EngineKind::RenPy, "RENPY"),
+        ] {
+            let toml = format!(
+                "game_id = \"g\"\nupload_dir = \"dist\"\n\n[{}]\nversion = \"1.2\"\nexecutable = \"game.exe\"\n",
+                section
+            );
+            let config = from_file(&toml, overrides(&[]));
+
+            assert_eq!(config.engine_type().unwrap(), Some(kind), "[{}]", section);
+            assert_eq!(config.engine_version().unwrap(), Some("1.2"), "[{}]", section);
+            // An engine build, so there's no entrypoint to hand out.
+            assert_eq!(config.entrypoint().unwrap(), None, "[{}]", section);
+            assert_eq!(
+                config.executable_files_to_validate(),
+                vec!["game.exe"],
+                "[{}]",
+                section
+            );
+            // Nothing overrode anything, so nothing was announced.
+            assert_eq!(
+                config.announced.load(Ordering::Relaxed),
+                0,
+                "[{}]",
+                section
+            );
+
+            // And an inert entrypoint override names the engine that ignores it.
+            let with_entrypoint = from_file(&toml, overrides(&[(ENV_ENTRYPOINT, "start.html")]));
+            let err = with_entrypoint
+                .entrypoint()
+                .expect_err("an engine build ignores the entrypoint");
+            assert!(err.to_string().contains(label), "got: {}", err);
+        }
+    }
+
+    /// A godot/unity version override can't retarget one of them either.
+    #[test]
+    fn an_engine_version_override_cannot_switch_away_from_an_executable_engine() {
+        let config = from_file(
+            "game_id = \"g\"\nupload_dir = \"dist\"\n\n[jsdos]\nversion = \"8.x\"\nexecutable = \"game.exe\"\n",
+            overrides(&[(ENV_GODOT_VERSION, "4.3")]),
+        );
+
+        let err = config.engine_type().expect_err("jsdos is already declared");
+        assert!(err.to_string().contains("[jsdos]"), "got: {}", err);
+        // The fields it doesn't concern still read.
+        assert_eq!(config.game_id().unwrap(), "g");
+    }
+
     /// Two engine sections in the file is a question about the file alone, so it
     /// answers the same however the environment is set — and it now reaches the
     /// entrypoint read instead of being swallowed into a `None`.
