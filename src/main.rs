@@ -43,13 +43,11 @@ fn mask_token(token: &str) -> String {
 /// variable to the value parser for `Option<String>` args, which would turn an
 /// unpopulated CI variable into a usage error instead of the "counts as unset"
 /// the overrides promise. Blank env vars are handled in `config`.
+/// Trims and rejects through the same [`config::non_blank`] every `WAVEDASH_*`
+/// variable and the stored credentials file go through, so "blank counts as
+/// unset" has one implementation to disagree with itself from.
 fn parse_non_empty_arg(value: &str) -> Result<String, String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        Err("value cannot be empty".to_string())
-    } else {
-        Ok(trimmed.to_string())
-    }
+    config::non_blank(value.to_string()).ok_or_else(|| "value cannot be empty".to_string())
 }
 
 #[derive(Parser)]
@@ -141,7 +139,11 @@ enum Commands {
 #[derive(Subcommand)]
 enum AuthCommands {
     Login {
-        #[arg(long, help = "API key for manual authentication")]
+        #[arg(
+            long,
+            value_parser = parse_non_empty_arg,
+            help = "API key for manual authentication"
+        )]
         token: Option<String>,
         #[arg(
             long = "token-stdin",
@@ -387,11 +389,7 @@ fn is_browser_login_unavailable() -> bool {
 fn read_token_from_stdin() -> Result<String> {
     let mut token = String::new();
     std::io::stdin().read_to_string(&mut token)?;
-    let token = token.trim().to_string();
-    if token.is_empty() {
-        anyhow::bail!("No token provided on stdin");
-    }
-    Ok(token)
+    config::non_blank(token).ok_or_else(|| anyhow::anyhow!("No token provided on stdin"))
 }
 
 #[tokio::main]

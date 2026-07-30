@@ -83,6 +83,14 @@ impl AuthManager {
     }
 
     pub fn store_credentials(&self, api_key: &str, email: Option<&str>) -> Result<()> {
+        // [`Self::resolve_auth`] treats a blank stored key as a corrupt file and
+        // reports it as unauthenticated, so writing one would leave `auth login`
+        // announcing success over a key `auth status` then disowns. Every way of
+        // supplying a key funnels through here, which makes this the one place
+        // that can promise the file only ever holds a usable one.
+        let api_key = config::non_blank(api_key.to_string())
+            .ok_or_else(|| anyhow::anyhow!("Refusing to store a blank API key."))?;
+
         let path = config::credentials_path()?;
 
         // Create parent directory if it doesn't exist
@@ -96,7 +104,7 @@ impl AuthManager {
         }
 
         let credentials = Credentials {
-            api_key: api_key.to_string(),
+            api_key,
             email: email.map(|s| s.to_string()),
         };
         let json = serde_json::to_string(&credentials)?;
@@ -570,6 +578,24 @@ mod tests {
 
         assert_eq!(info.source, AuthSource::None);
         assert!(info.api_key.is_none());
+    }
+
+    /// The other half of the rule above: what the read path disowns, the write
+    /// path must never produce. Refused before the credentials path is touched,
+    /// so this test writes nothing.
+    #[test]
+    fn a_blank_api_key_is_never_stored() {
+        for blank in ["", "   ", "\t", "\n"] {
+            let err = AuthManager
+                .store_credentials(blank, None)
+                .expect_err(&format!("stored blank key {:?}", blank));
+
+            assert!(
+                err.to_string().contains("blank API key"),
+                "unexpected error: {}",
+                err
+            );
+        }
     }
 
     #[test]
