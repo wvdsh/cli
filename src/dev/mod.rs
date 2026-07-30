@@ -90,7 +90,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
     // play's real default entrypoint and ignore their exported index.html;
     // RenPy counts as custom-HTML.
     let engine_kind = wavedash_config.engine_type()?;
-    let entrypoint = wavedash_config.entrypoint().map(String::from);
+    let entrypoint = wavedash_config.entrypoint()?.map(String::from);
     let api_host = config::get("api_host")?;
     let client = config::create_http_client()?;
 
@@ -126,7 +126,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
     let local_build = create_local_build(
         wavedash_config.game_id()?,
         engine_kind.map(|e| e.as_label()),
-        wavedash_config.engine_version(),
+        wavedash_config.engine_version()?,
         entrypoint.as_deref(),
         &api_key,
     )
@@ -211,7 +211,7 @@ async fn resolve_engine_entry(
     api_host: &str,
     client: &reqwest::Client,
 ) -> Result<server::EngineEntry> {
-    let version = wavedash_config.engine_version().ok_or_else(|| {
+    let version = wavedash_config.engine_version()?.ok_or_else(|| {
         anyhow::anyhow!("{} requires a version in wavedash.toml", kind.as_label())
     })?;
     // Resolution lives play-side (shared with prod's embed.js), so new engine

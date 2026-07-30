@@ -53,7 +53,7 @@ impl FileStaging {
     /// Validate required files exist in the upload directory
     pub fn prepare(upload_dir: &Path, wavedash_config: &WavedashConfig) -> Result<Self> {
         // Validate entrypoint exists and is an HTML or JS file
-        if let Some((entrypoint_str, source)) = wavedash_config.entrypoint_with_source() {
+        if let Some((entrypoint_str, source)) = wavedash_config.entrypoint_with_source()? {
             let lower = entrypoint_str.to_ascii_lowercase();
             if !lower.ends_with(".html") && !lower.ends_with(".htm") && !lower.ends_with(".js") {
                 anyhow::bail!(

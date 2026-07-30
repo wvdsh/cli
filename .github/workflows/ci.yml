@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# `build.rs` requires these three or it panics, and they normally come from
+# Doppler (or a local .env, which is gitignored). CI only compiles and runs unit
+# tests — nothing here resolves a host or opens a socket — so placeholders keep
+# the job hermetic and secret-free, which also means it runs on fork PRs. If a
+# test ever needs to reach a real deployment, add a DOPPLER_TOKEN secret and put
+# `doppler run --` in front of the cargo commands instead.
+env:
+  SITE_HOST: https://ci.invalid
+  PLAYSITE_HOST: https://play.ci.invalid
+  CONVEX_HTTP_URL: https://api.ci.invalid
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # --all-targets so the test code is linted too, and -D warnings so a lint
+      # that everyone ignores locally can't accumulate.
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test
