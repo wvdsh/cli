@@ -101,9 +101,7 @@ pub async fn handle_clear_playtest_data(args: ClearPlaytestDataArgs<'_>) -> Resu
         None => "ALL players".to_string(),
     };
 
-    // Confirm before doing anything destructive. Refusing outright when we can't
-    // prompt — the same check that stops `auth login` reaching for a browser —
-    // keeps a piped or CI invocation from deleting on an unanswered question.
+    // Confirm before doing anything destructive.
     if !args.force {
         if crate::is_non_interactive() {
             anyhow::bail!(

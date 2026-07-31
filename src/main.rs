@@ -453,14 +453,6 @@ fn env_flag_enabled(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// True when nothing can be asked of a user: CI, or stdin isn't a terminal.
-///
-/// Named for the condition rather than any one consequence of it, because the
-/// consequences differ — `auth login` can't reach for a browser, and
-/// `clear-playtest-data` can't get a confirmation it's unwilling to assume. Both
-/// have to agree on what "interactive" means, and the previous split (this
-/// function plus a copy in `clear_playtest_data` whose comment admitted it was
-/// mirroring this one) gave them two chances not to.
 pub(crate) fn is_non_interactive() -> bool {
     env_flag_enabled("CI") || !std::io::stdin().is_terminal()
 }
@@ -555,7 +547,20 @@ async fn run() -> Result<()> {
                 }
                 AuthCommands::Logout => {
                     auth_manager.clear_credentials()?;
-                    println!("✓ Successfully logged out");
+                    // The file is all logout can reach, but the environment
+                    // outranks it on every request and nothing announces that as it
+                    // happens, so a bare success line is one the next command
+                    // contradicts.
+                    match std::env::var(config::ENV_TOKEN)
+                        .ok()
+                        .and_then(config::non_blank)
+                    {
+                        Some(_) => println!(
+                            "✓ Removed stored credentials, but {} is still set and still authenticates every command.\nUnset it to finish logging out.",
+                            config::ENV_TOKEN
+                        ),
+                        None => println!("✓ Successfully logged out"),
+                    }
                 }
                 AuthCommands::Status => {
                     let auth_info = auth_manager.get_auth_info();
@@ -773,22 +778,12 @@ mod tests {
     use super::*;
     use clap::CommandFactory;
 
-    /// Every `--game-id` has to reject a blank value rather than hand it to
-    /// [`resolve_game_id`], which returns a typed flag verbatim: `Some("")` would
-    /// beat both `WAVEDASH_GAME_ID` and the config file and then land in a request
-    /// URL as `/api/games//…`.
+    /// A blank one would reach [`resolve_game_id`], which returns a typed flag
+    /// verbatim, and land in a request URL as `/api/games//…`.
     ///
-    /// Asserted by walking the command tree instead of listing the subcommands,
-    /// because the listing is the thing that goes stale. `clear-playtest-data` was
-    /// written on `main` while the parser was being added to the other six args
-    /// here, so it arrived without one and merged clean — the two edits never
-    /// touched the same lines. A subcommand added the same way fails this test
-    /// instead.
-    ///
-    /// Parsing the real argv rather than poking at the arg's `ValueParser` (which
-    /// clap keeps private): a value parser runs as its arg is parsed, while missing
-    /// required args are only reported once parsing finishes, so a blank `--game-id`
-    /// fails validation before a subcommand's unrelated required args are missed.
+    /// Parses real argv because clap keeps `ValueParser::parse_ref` private. Value
+    /// parsers run during parsing and missing required args are only reported after
+    /// it, so the blank fails first even on subcommands with other required args.
     #[test]
     fn every_game_id_arg_rejects_a_blank_value() {
         fn walk(cmd: &clap::Command, path: &[String], checked: &mut Vec<String>) {
@@ -831,8 +826,6 @@ mod tests {
         let mut checked = Vec::new();
         walk(&cli, &["wavedash".to_string()], &mut checked);
 
-        // Guards against the walk silently finding nothing if the flag is ever
-        // renamed, which would leave this test passing over zero assertions.
         assert!(
             checked.len() >= 7,
             "expected every --game-id arg to be checked, only saw: {:?}",

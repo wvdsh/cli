@@ -1614,6 +1614,54 @@ mod tests {
         }
     }
 
+    /// Holds up the `expect` in `dev::resolve_engine_entry`.
+    #[test]
+    fn an_engine_kind_always_arrives_with_a_version() {
+        for section in ["godot", "unity", "jsdos", "ruffle", "renpy"] {
+            let declared = format!("game_id = \"g\"\nupload_dir = \"dist\"\n\n[{}]\n", section);
+
+            let versioned = from_file(&format!("{}version = \"1.2\"\n", declared), overrides(&[]));
+            assert!(
+                versioned.engine_type().unwrap().is_some(),
+                "[{}] declared a kind",
+                section
+            );
+            assert_eq!(
+                versioned.engine_version().unwrap(),
+                Some("1.2"),
+                "[{}] kind without version",
+                section
+            );
+
+            // A missing version fails the read `engine_type` shares, so `dev` never
+            // gets a kind to call `resolve_engine_entry` with in the first place.
+            let bare = from_file(&declared, overrides(&[]));
+            assert!(
+                bare.engine_type().is_err(),
+                "[{}] a missing version has to stop engine_type too",
+                section
+            );
+            assert!(
+                bare.engine_version().is_err(),
+                "[{}] a missing version has to be an Err, not the None dev would hit",
+                section
+            );
+        }
+
+        for (section, var) in [("godot", ENV_GODOT_VERSION), ("unity", ENV_UNITY_VERSION)] {
+            let config = from_file(
+                &format!("game_id = \"g\"\nupload_dir = \"dist\"\n\n[{}]\n", section),
+                overrides(&[(var, "4.3")]),
+            );
+
+            assert_eq!(config.engine_version().unwrap(), Some("4.3"), "{}", var);
+        }
+
+        let engineless = from_file("game_id = \"g\"\nupload_dir = \"dist\"\n", overrides(&[]));
+        assert_eq!(engineless.engine_type().unwrap(), None);
+        assert_eq!(engineless.engine_version().unwrap(), None);
+    }
+
     /// A godot/unity version override can't retarget one of them either.
     #[test]
     fn an_engine_version_override_cannot_switch_away_from_an_executable_engine() {

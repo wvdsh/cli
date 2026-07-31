@@ -211,9 +211,9 @@ async fn resolve_engine_entry(
     api_host: &str,
     client: &reqwest::Client,
 ) -> Result<server::EngineEntry> {
-    let version = wavedash_config.engine_version()?.ok_or_else(|| {
-        anyhow::anyhow!("{} requires a version in wavedash.toml", kind.as_label())
-    })?;
+    let version = wavedash_config
+        .engine_version()?
+        .expect("engine_type() resolved a kind, so active_engine() resolved its version");
     // Resolution lives play-side (shared with prod's embed.js), so new engine
     // versions work the moment play deploys. Unresolvable versions 404 when
     // the shell loads the script and the gate shows the resolver's message.
