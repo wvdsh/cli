@@ -185,6 +185,26 @@ impl AuthManager {
     }
 }
 
+/// The API key for a scripted command, or the standard refusal when there is
+/// none. Every non-interactive command needs this exact pair — the key and the
+/// one sentence telling the user how to get one — and each had grown its own
+/// verbatim copy, four in total, so the wording and the [`AuthSource`] match
+/// could drift apart one file at a time.
+///
+/// Deliberately not a method on [`AuthManager`]: the "no key" case is a refusal
+/// to proceed rather than a value to hand back, which is what separates this
+/// from [`AuthManager::get_api_key`].
+pub(crate) fn require_api_key() -> Result<String> {
+    let auth_manager = AuthManager::new()?;
+    let auth_info = auth_manager.get_auth_info();
+    match auth_info.source {
+        AuthSource::None => {
+            bail!("Not authenticated. Run `wavedash auth login` first.")
+        }
+        _ => Ok(auth_info.api_key.unwrap()),
+    }
+}
+
 pub(crate) fn generate_state() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()

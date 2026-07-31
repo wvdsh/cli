@@ -141,7 +141,8 @@ enum Commands {
     ClearPlaytestData {
         #[arg(
             long = "game-id",
-            help = "Game ID (defaults to game_id in wavedash.toml)"
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to WAVEDASH_GAME_ID, then game_id in wavedash.toml)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -452,7 +453,15 @@ fn env_flag_enabled(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn is_browser_login_unavailable() -> bool {
+/// True when nothing can be asked of a user: CI, or stdin isn't a terminal.
+///
+/// Named for the condition rather than any one consequence of it, because the
+/// consequences differ — `auth login` can't reach for a browser, and
+/// `clear-playtest-data` can't get a confirmation it's unwilling to assume. Both
+/// have to agree on what "interactive" means, and the previous split (this
+/// function plus a copy in `clear_playtest_data` whose comment admitted it was
+/// mirroring this one) gave them two chances not to.
+pub(crate) fn is_non_interactive() -> bool {
     env_flag_enabled("CI") || !std::io::stdin().is_terminal()
 }
 
@@ -524,7 +533,7 @@ async fn run() -> Result<()> {
                         auth_manager.store_credentials(&api_key, None)?;
                         println!("✓ Successfully stored API key");
                     } else {
-                        if is_browser_login_unavailable() {
+                        if is_non_interactive() {
                             anyhow::bail!(
                                 "Browser login isn't available in this environment.\n\nCreate an API key at https://wavedash.com/dev-portal/keys. Then set WAVEDASH_TOKEN or pipe the key into wavedash auth login --token-stdin."
                             );
@@ -757,4 +766,77 @@ async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// Every `--game-id` has to reject a blank value rather than hand it to
+    /// [`resolve_game_id`], which returns a typed flag verbatim: `Some("")` would
+    /// beat both `WAVEDASH_GAME_ID` and the config file and then land in a request
+    /// URL as `/api/games//…`.
+    ///
+    /// Asserted by walking the command tree instead of listing the subcommands,
+    /// because the listing is the thing that goes stale. `clear-playtest-data` was
+    /// written on `main` while the parser was being added to the other six args
+    /// here, so it arrived without one and merged clean — the two edits never
+    /// touched the same lines. A subcommand added the same way fails this test
+    /// instead.
+    ///
+    /// Parsing the real argv rather than poking at the arg's `ValueParser` (which
+    /// clap keeps private): a value parser runs as its arg is parsed, while missing
+    /// required args are only reported once parsing finishes, so a blank `--game-id`
+    /// fails validation before a subcommand's unrelated required args are missed.
+    #[test]
+    fn every_game_id_arg_rejects_a_blank_value() {
+        fn walk(cmd: &clap::Command, path: &[String], checked: &mut Vec<String>) {
+            if cmd
+                .get_arguments()
+                .any(|arg| arg.get_long() == Some("game-id"))
+            {
+                for blank in ["", "   ", "\t", "\n"] {
+                    let mut argv = path.to_vec();
+                    argv.push("--game-id".to_string());
+                    argv.push(blank.to_string());
+
+                    let err = Cli::command()
+                        .try_get_matches_from(&argv)
+                        .expect_err(&format!(
+                            "`{}` accepted the blank --game-id {:?}",
+                            path.join(" "),
+                            blank
+                        ));
+                    assert_eq!(
+                        err.kind(),
+                        clap::error::ErrorKind::ValueValidation,
+                        "`{}` rejected the blank --game-id {:?} for the wrong reason: {}",
+                        path.join(" "),
+                        blank,
+                        err
+                    );
+                }
+                checked.push(path.join(" "));
+            }
+
+            for sub in cmd.get_subcommands() {
+                let mut sub_path = path.to_vec();
+                sub_path.push(sub.get_name().to_string());
+                walk(sub, &sub_path, checked);
+            }
+        }
+
+        let cli = Cli::command();
+        let mut checked = Vec::new();
+        walk(&cli, &["wavedash".to_string()], &mut checked);
+
+        // Guards against the walk silently finding nothing if the flag is ever
+        // renamed, which would leave this test passing over zero assertions.
+        assert!(
+            checked.len() >= 7,
+            "expected every --game-id arg to be checked, only saw: {:?}",
+            checked
+        );
+    }
 }
