@@ -2,6 +2,7 @@ mod achievements;
 mod auth;
 mod browser;
 mod builds;
+mod clear_playtest_data;
 mod config;
 mod dev;
 mod file_staging;
@@ -19,6 +20,7 @@ use anyhow::Result;
 use auth::{login_with_browser, AuthManager, AuthSource};
 use builds::handle_build_push;
 use clap::{Parser, Subcommand};
+use clear_playtest_data::{handle_clear_playtest_data, ClearPlaytestDataArgs};
 use colored::Colorize;
 use config::resolve_game_id;
 use dev::handle_dev;
@@ -128,6 +130,80 @@ enum Commands {
     Achievement {
         #[command(subcommand)]
         action: AchievementCommands,
+    },
+    #[command(
+        name = "clear-playtest-data",
+        about = "Delete playtest data (achievements, saves, stats, leaderboards, entitlements, UGC) for a game"
+    )]
+    ClearPlaytestData {
+        #[arg(
+            long = "game-id",
+            help = "Game ID (defaults to game_id in wavedash.toml)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(
+            short = 'u',
+            long = "username",
+            visible_alias = "user",
+            help = "Only clear this player's data; omit to clear everyone's"
+        )]
+        username: Option<String>,
+        // --- What to clear. If none are passed, all categories are cleared. ---
+        #[arg(
+            long = "achievements",
+            visible_alias = "achs",
+            help = "Clear achievement progress",
+            help_heading = "What to clear"
+        )]
+        achievements: bool,
+        #[arg(
+            long = "cloud-saves",
+            visible_alias = "saves",
+            help = "Clear cloud saves",
+            help_heading = "What to clear"
+        )]
+        cloud_saves: bool,
+        #[arg(
+            long = "stats",
+            help = "Clear stat progress",
+            help_heading = "What to clear"
+        )]
+        stats: bool,
+        #[arg(
+            long = "leaderboards",
+            visible_alias = "lbs",
+            help = "Clear leaderboard entries",
+            help_heading = "What to clear"
+        )]
+        leaderboards: bool,
+        #[arg(
+            long = "paid-content-entitlements",
+            visible_aliases = ["entitlements", "ents"],
+            help = "Clear paid content entitlements",
+            help_heading = "What to clear"
+        )]
+        entitlements: bool,
+        #[arg(
+            long = "user-generated-content",
+            visible_alias = "ugc",
+            help = "Clear user-generated content",
+            help_heading = "What to clear"
+        )]
+        ugc: bool,
+        #[arg(
+            long = "force",
+            short = 'y',
+            visible_alias = "yes",
+            help = "Skip confirmation (required when non-interactive)"
+        )]
+        force: bool,
     },
     #[command(about = "Check for and install updates")]
     Update,
@@ -330,10 +406,7 @@ enum AchievementCommands {
         triggered_by_stat_id: Option<String>,
         #[arg(long, help = "Stat threshold")]
         threshold: Option<f64>,
-        #[arg(
-            long,
-            help = "Path to a new image file (jpg, jpeg, png, webp)"
-        )]
+        #[arg(long, help = "Path to a new image file (jpg, jpeg, png, webp)")]
         image: Option<PathBuf>,
     },
     #[command(about = "Delete an achievement")]
@@ -352,10 +425,7 @@ enum AchievementCommands {
         config: PathBuf,
         #[arg(long, help = "Achievement ID")]
         id: String,
-        #[arg(
-            long,
-            help = "Required if any user has unlocked this achievement"
-        )]
+        #[arg(long, help = "Required if any user has unlocked this achievement")]
         force: bool,
     },
 }
@@ -570,75 +640,104 @@ async fn run() -> Result<()> {
                 handle_stat_delete(&game_id, &id, force).await?;
             }
         },
-        Commands::Achievement { action } => match action {
-            AchievementCommands::Create {
-                game_id,
-                config,
-                identifier,
-                title,
-                description,
-                secret,
-                triggered_by_stat_id,
-                threshold,
-                image,
-            } => {
-                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
-                handle_achievement_create(CreateAchievementArgs {
-                    game_id: &game_id,
-                    identifier: &identifier,
-                    title: &title,
-                    description: &description,
+        Commands::Achievement { action } => {
+            match action {
+                AchievementCommands::Create {
+                    game_id,
+                    config,
+                    identifier,
+                    title,
+                    description,
                     secret,
-                    triggered_by_stat_id: triggered_by_stat_id.as_deref(),
-                    stat_threshold: threshold,
-                    image_path: image.as_deref(),
-                })
-                .await?;
-            }
-            AchievementCommands::Update {
-                game_id,
-                config,
-                id,
-                identifier,
-                title,
-                description,
-                secret,
-                triggered_by_stat_id,
-                threshold,
-                image,
-            } => {
-                // CLI convention: --triggered-by-stat-id "" clears, omitted leaves alone
-                let triggered: Option<Option<&str>> = triggered_by_stat_id.as_deref().map(|s| {
-                    if s.is_empty() {
-                        None
-                    } else {
-                        Some(s)
-                    }
-                });
-                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
-                handle_achievement_update(UpdateAchievementArgs {
-                    game_id: &game_id,
-                    achievement_id: &id,
-                    title: title.as_deref(),
-                    identifier: identifier.as_deref(),
-                    description: description.as_deref(),
+                    triggered_by_stat_id,
+                    threshold,
+                    image,
+                } => {
+                    let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                    handle_achievement_create(CreateAchievementArgs {
+                        game_id: &game_id,
+                        identifier: &identifier,
+                        title: &title,
+                        description: &description,
+                        secret,
+                        triggered_by_stat_id: triggered_by_stat_id.as_deref(),
+                        stat_threshold: threshold,
+                        image_path: image.as_deref(),
+                    })
+                    .await?;
+                }
+                AchievementCommands::Update {
+                    game_id,
+                    config,
+                    id,
+                    identifier,
+                    title,
+                    description,
                     secret,
-                    triggered_by_stat_id: triggered,
-                    stat_threshold: threshold,
-                    image_path: image.as_deref(),
-                })
-                .await?;
+                    triggered_by_stat_id,
+                    threshold,
+                    image,
+                } => {
+                    // CLI convention: --triggered-by-stat-id "" clears, omitted leaves alone
+                    let triggered: Option<Option<&str>> =
+                        triggered_by_stat_id.as_deref().map(|s| {
+                            if s.is_empty() {
+                                None
+                            } else {
+                                Some(s)
+                            }
+                        });
+                    let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                    handle_achievement_update(UpdateAchievementArgs {
+                        game_id: &game_id,
+                        achievement_id: &id,
+                        title: title.as_deref(),
+                        identifier: identifier.as_deref(),
+                        description: description.as_deref(),
+                        secret,
+                        triggered_by_stat_id: triggered,
+                        stat_threshold: threshold,
+                        image_path: image.as_deref(),
+                    })
+                    .await?;
+                }
+                AchievementCommands::Delete {
+                    game_id,
+                    config,
+                    id,
+                    force,
+                } => {
+                    let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                    handle_achievement_delete(&game_id, &id, force).await?;
+                }
             }
-            AchievementCommands::Delete {
-                game_id,
-                config,
-                id,
+        }
+        Commands::ClearPlaytestData {
+            game_id,
+            config,
+            username,
+            achievements,
+            cloud_saves,
+            stats,
+            leaderboards,
+            entitlements,
+            ugc,
+            force,
+        } => {
+            let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+            handle_clear_playtest_data(ClearPlaytestDataArgs {
+                game_id: &game_id,
+                username: username.as_deref(),
+                achievements,
+                cloud_saves,
+                stats,
+                leaderboards,
+                entitlements,
+                ugc,
                 force,
-            } => {
-                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
-                handle_achievement_delete(&game_id, &id, force).await?;
-            }
-        },
+            })
+            .await?;
+        }
         Commands::Update => {
             updater::run_update().await?;
         }
