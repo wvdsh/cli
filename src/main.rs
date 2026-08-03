@@ -142,7 +142,7 @@ enum Commands {
         #[arg(
             long = "game-id",
             value_parser = parse_non_empty_arg,
-            help = "Game ID (defaults to WAVEDASH_GAME_ID, then game_id in wavedash.toml)"
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -287,7 +287,7 @@ enum StatCommands {
         #[arg(
             long = "game-id",
             value_parser = parse_non_empty_arg,
-            help = "Game ID (defaults to WAVEDASH_GAME_ID, then game_id in wavedash.toml)"
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -307,7 +307,7 @@ enum StatCommands {
         #[arg(
             long = "game-id",
             value_parser = parse_non_empty_arg,
-            help = "Game ID (defaults to WAVEDASH_GAME_ID, then game_id in wavedash.toml)"
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -329,7 +329,7 @@ enum StatCommands {
         #[arg(
             long = "game-id",
             value_parser = parse_non_empty_arg,
-            help = "Game ID (defaults to WAVEDASH_GAME_ID, then game_id in wavedash.toml)"
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -353,7 +353,7 @@ enum AchievementCommands {
         #[arg(
             long = "game-id",
             value_parser = parse_non_empty_arg,
-            help = "Game ID (defaults to WAVEDASH_GAME_ID, then game_id in wavedash.toml)"
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -392,7 +392,7 @@ enum AchievementCommands {
         #[arg(
             long = "game-id",
             value_parser = parse_non_empty_arg,
-            help = "Game ID (defaults to WAVEDASH_GAME_ID, then game_id in wavedash.toml)"
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -427,7 +427,7 @@ enum AchievementCommands {
         #[arg(
             long = "game-id",
             value_parser = parse_non_empty_arg,
-            help = "Game ID (defaults to WAVEDASH_GAME_ID, then game_id in wavedash.toml)"
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
         )]
         game_id: Option<String>,
         #[arg(
