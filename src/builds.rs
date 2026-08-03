@@ -147,7 +147,7 @@ pub async fn handle_build_push(
     let config_dir = config_path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?;
-    let upload_dir = config_dir.join(&wavedash_config.upload_dir);
+    let upload_dir = config_dir.join(wavedash_config.upload_dir()?);
 
     // Verify source directory exists
     if !upload_dir.exists() {
@@ -170,11 +170,11 @@ pub async fn handle_build_push(
     let engine_kind = wavedash_config.engine_type()?;
     let creds = get_temp_credentials(
         BuildUploadInfo {
-            game_id: &wavedash_config.game_id,
+            game_id: wavedash_config.game_id()?,
             engine: engine_kind.map(|e| e.as_label()),
-            engine_version: wavedash_config.engine_version(),
-            entrypoint: wavedash_config.entrypoint(),
-            entrypoint_params: wavedash_config.executable_entrypoint_params(),
+            engine_version: wavedash_config.engine_version()?,
+            entrypoint: wavedash_config.entrypoint()?,
+            entrypoint_params: wavedash_config.executable_entrypoint_params()?,
             message: message.as_deref(),
             build_size_bytes: total_bytes,
         },
@@ -198,7 +198,7 @@ pub async fn handle_build_push(
 
     // Notify the server that upload is complete
     let result =
-        notify_upload_complete(&wavedash_config.game_id, &creds.game_build_id, &api_key).await?;
+        notify_upload_complete(wavedash_config.game_id()?, &creds.game_build_id, &api_key).await?;
 
     // Print the play URL
     let site_host = config::get("open_browser_website_host")?;

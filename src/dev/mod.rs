@@ -67,17 +67,13 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
         }
     }
 
+    // No existence check of its own: `load` reports a missing file (naming
+    // --config and `wavedash init`), and letting it decide is what keeps `dev`
+    // runnable from overrides alone like every other command.
     let config_path = config_path.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
-    if !config_path.exists() {
-        anyhow::bail!(
-            "Unable to find config file at {}. Pass --config if it's located elsewhere.",
-            config_path.display()
-        );
-    }
-
     let wavedash_config = WavedashConfig::load(&config_path)?;
     let config_dir = config_parent_dir(&config_path)?;
-    let upload_dir = config_dir.join(&wavedash_config.upload_dir);
+    let upload_dir = config_dir.join(wavedash_config.upload_dir()?);
     if !upload_dir.exists() || !upload_dir.is_dir() {
         anyhow::bail!(
             "Upload directory does not exist or is not a directory: {}",
@@ -94,7 +90,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
     // play's real default entrypoint and ignore their exported index.html;
     // RenPy counts as custom-HTML.
     let engine_kind = wavedash_config.engine_type()?;
-    let entrypoint = wavedash_config.entrypoint().map(String::from);
+    let entrypoint = wavedash_config.entrypoint()?.map(String::from);
     let api_host = config::get("api_host")?;
     let client = config::create_http_client()?;
 
@@ -128,9 +124,9 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
         }
     }
     let local_build = create_local_build(
-        &wavedash_config.game_id,
+        wavedash_config.game_id()?,
         engine_kind.map(|e| e.as_label()),
-        wavedash_config.engine_version(),
+        wavedash_config.engine_version()?,
         entrypoint.as_deref(),
         &api_key,
     )
@@ -215,9 +211,9 @@ async fn resolve_engine_entry(
     api_host: &str,
     client: &reqwest::Client,
 ) -> Result<server::EngineEntry> {
-    let version = wavedash_config.engine_version().ok_or_else(|| {
-        anyhow::anyhow!("{} requires a version in wavedash.toml", kind.as_label())
-    })?;
+    let version = wavedash_config
+        .engine_version()?
+        .expect("engine_type() resolved a kind, so active_engine() resolved its version");
     // Resolution lives play-side (shared with prod's embed.js), so new engine
     // versions work the moment play deploys. Unresolvable versions 404 when
     // the shell loads the script and the gate shows the resolver's message.
@@ -241,7 +237,7 @@ async fn resolve_engine_entry(
             fetch_entrypoint_params(&html, kind, version, api_host, client).await?
         }
         // Params come straight from wavedash.toml, same as `wavedash push`.
-        _ => wavedash_config.executable_entrypoint_params().ok_or_else(|| {
+        _ => wavedash_config.executable_entrypoint_params()?.ok_or_else(|| {
             anyhow::anyhow!("Missing executable config in wavedash.toml for {}", kind.as_label())
         })?,
     };

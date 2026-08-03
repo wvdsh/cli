@@ -40,13 +40,16 @@ fn mask_token(token: &str) -> String {
     }
 }
 
+/// Rejects a blank value the user typed. Only ever sees typed values — no `#[arg]`
+/// using it is wired to clap's `env`, deliberately: clap feeds a set-but-blank
+/// variable to the value parser for `Option<String>` args, which would turn an
+/// unpopulated CI variable into a usage error instead of the "counts as unset"
+/// the overrides promise. Blank env vars are handled in `config`.
+/// Trims and rejects through the same [`config::non_blank`] every `WAVEDASH_*`
+/// variable and the stored credentials file go through, so "blank counts as
+/// unset" has one implementation to disagree with itself from.
 fn parse_non_empty_arg(value: &str) -> Result<String, String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        Err("value cannot be empty".to_string())
-    } else {
-        Ok(trimmed.to_string())
-    }
+    config::non_blank(value.to_string()).ok_or_else(|| "value cannot be empty".to_string())
 }
 
 #[derive(Parser)]
@@ -138,7 +141,8 @@ enum Commands {
     ClearPlaytestData {
         #[arg(
             long = "game-id",
-            help = "Game ID (defaults to game_id in wavedash.toml)"
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -212,7 +216,11 @@ enum Commands {
 #[derive(Subcommand)]
 enum AuthCommands {
     Login {
-        #[arg(long, help = "API key for manual authentication")]
+        #[arg(
+            long,
+            value_parser = parse_non_empty_arg,
+            help = "API key for manual authentication"
+        )]
         token: Option<String>,
         #[arg(
             long = "token-stdin",
@@ -278,7 +286,8 @@ enum StatCommands {
     Create {
         #[arg(
             long = "game-id",
-            help = "Game ID (defaults to game_id in wavedash.toml)"
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -297,7 +306,8 @@ enum StatCommands {
     Update {
         #[arg(
             long = "game-id",
-            help = "Game ID (defaults to game_id in wavedash.toml)"
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -318,7 +328,8 @@ enum StatCommands {
     Delete {
         #[arg(
             long = "game-id",
-            help = "Game ID (defaults to game_id in wavedash.toml)"
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -341,7 +352,8 @@ enum AchievementCommands {
     Create {
         #[arg(
             long = "game-id",
-            help = "Game ID (defaults to game_id in wavedash.toml)"
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -379,7 +391,8 @@ enum AchievementCommands {
     Update {
         #[arg(
             long = "game-id",
-            help = "Game ID (defaults to game_id in wavedash.toml)"
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -413,7 +426,8 @@ enum AchievementCommands {
     Delete {
         #[arg(
             long = "game-id",
-            help = "Game ID (defaults to game_id in wavedash.toml)"
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
         )]
         game_id: Option<String>,
         #[arg(
@@ -439,18 +453,14 @@ fn env_flag_enabled(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn is_browser_login_unavailable() -> bool {
+pub(crate) fn is_non_interactive() -> bool {
     env_flag_enabled("CI") || !std::io::stdin().is_terminal()
 }
 
 fn read_token_from_stdin() -> Result<String> {
     let mut token = String::new();
     std::io::stdin().read_to_string(&mut token)?;
-    let token = token.trim().to_string();
-    if token.is_empty() {
-        anyhow::bail!("No token provided on stdin");
-    }
-    Ok(token)
+    config::non_blank(token).ok_or_else(|| anyhow::anyhow!("No token provided on stdin"))
 }
 
 #[tokio::main]
@@ -515,7 +525,7 @@ async fn run() -> Result<()> {
                         auth_manager.store_credentials(&api_key, None)?;
                         println!("✓ Successfully stored API key");
                     } else {
-                        if is_browser_login_unavailable() {
+                        if is_non_interactive() {
                             anyhow::bail!(
                                 "Browser login isn't available in this environment.\n\nCreate an API key at https://wavedash.com/dev-portal/keys. Then set WAVEDASH_TOKEN or pipe the key into wavedash auth login --token-stdin."
                             );
@@ -537,7 +547,20 @@ async fn run() -> Result<()> {
                 }
                 AuthCommands::Logout => {
                     auth_manager.clear_credentials()?;
-                    println!("✓ Successfully logged out");
+                    // The file is all logout can reach, but the environment
+                    // outranks it on every request and nothing announces that as it
+                    // happens, so a bare success line is one the next command
+                    // contradicts.
+                    match std::env::var(config::ENV_TOKEN)
+                        .ok()
+                        .and_then(config::non_blank)
+                    {
+                        Some(_) => println!(
+                            "✓ Removed stored credentials, but {} is still set and still authenticates every command.\nUnset it to finish logging out.",
+                            config::ENV_TOKEN
+                        ),
+                        None => println!("✓ Successfully logged out"),
+                    }
                 }
                 AuthCommands::Status => {
                     let auth_info = auth_manager.get_auth_info();
@@ -748,4 +771,65 @@ async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// A blank one would reach [`resolve_game_id`], which returns a typed flag
+    /// verbatim, and land in a request URL as `/api/games//…`.
+    ///
+    /// Parses real argv because clap keeps `ValueParser::parse_ref` private. Value
+    /// parsers run during parsing and missing required args are only reported after
+    /// it, so the blank fails first even on subcommands with other required args.
+    #[test]
+    fn every_game_id_arg_rejects_a_blank_value() {
+        fn walk(cmd: &clap::Command, path: &[String], checked: &mut Vec<String>) {
+            if cmd
+                .get_arguments()
+                .any(|arg| arg.get_long() == Some("game-id"))
+            {
+                for blank in ["", "   ", "\t", "\n"] {
+                    let mut argv = path.to_vec();
+                    argv.push("--game-id".to_string());
+                    argv.push(blank.to_string());
+
+                    let err = Cli::command()
+                        .try_get_matches_from(&argv)
+                        .expect_err(&format!(
+                            "`{}` accepted the blank --game-id {:?}",
+                            path.join(" "),
+                            blank
+                        ));
+                    assert_eq!(
+                        err.kind(),
+                        clap::error::ErrorKind::ValueValidation,
+                        "`{}` rejected the blank --game-id {:?} for the wrong reason: {}",
+                        path.join(" "),
+                        blank,
+                        err
+                    );
+                }
+                checked.push(path.join(" "));
+            }
+
+            for sub in cmd.get_subcommands() {
+                let mut sub_path = path.to_vec();
+                sub_path.push(sub.get_name().to_string());
+                walk(sub, &sub_path, checked);
+            }
+        }
+
+        let cli = Cli::command();
+        let mut checked = Vec::new();
+        walk(&cli, &["wavedash".to_string()], &mut checked);
+
+        assert!(
+            checked.len() >= 7,
+            "expected every --game-id arg to be checked, only saw: {:?}",
+            checked
+        );
+    }
 }

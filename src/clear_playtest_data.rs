@@ -1,9 +1,8 @@
-use crate::auth::{AuthManager, AuthSource};
+use crate::auth::require_api_key;
 use crate::config;
 use anyhow::Result;
 use colored::Colorize;
 use serde_json::json;
-use std::io::IsTerminal;
 
 /// A single kind of playtest data that can be wiped for a game.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,29 +87,6 @@ impl ClearPlaytestDataArgs<'_> {
     }
 }
 
-fn require_api_key() -> Result<String> {
-    let auth_manager = AuthManager::new()?;
-    let auth_info = auth_manager.get_auth_info();
-    match auth_info.source {
-        AuthSource::None => {
-            anyhow::bail!("Not authenticated. Run `wavedash auth login` first.")
-        }
-        _ => Ok(auth_info.api_key.unwrap()),
-    }
-}
-
-/// True when we can't safely prompt for confirmation (CI or piped stdin).
-/// Mirrors `is_browser_login_unavailable` in main.rs.
-fn is_non_interactive() -> bool {
-    let ci = std::env::var("CI")
-        .map(|value| {
-            let value = value.trim().to_ascii_lowercase();
-            !value.is_empty() && value != "0" && value != "false"
-        })
-        .unwrap_or(false);
-    ci || !std::io::stdin().is_terminal()
-}
-
 pub async fn handle_clear_playtest_data(args: ClearPlaytestDataArgs<'_>) -> Result<()> {
     let api_key = require_api_key()?;
     let categories = args.categories();
@@ -127,7 +103,7 @@ pub async fn handle_clear_playtest_data(args: ClearPlaytestDataArgs<'_>) -> Resu
 
     // Confirm before doing anything destructive.
     if !args.force {
-        if is_non_interactive() {
+        if crate::is_non_interactive() {
             anyhow::bail!(
                 "Refusing to clear playtest data without confirmation.\n\
                  Re-run with --force (alias --yes / -y) to proceed non-interactively."
