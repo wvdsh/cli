@@ -23,10 +23,17 @@ use axum::{
 use serde::Deserialize;
 use tokio::net::TcpListener;
 
-/// Always `@latest`. Classic parser-blocking IIFE (auto-runs setupWavedashSDK):
-/// the only way `window.Wavedash` exists before game scripts parse — module
-/// scripts are always deferred. jsdelivr sends ACAO * + CORP, satisfying COEP.
-const INJECT_URL: &str = "https://cdn.jsdelivr.net/npm/@wvdsh/sdk-js@latest/dist/inject.global.js";
+const SDK_JS_VERSION: &str = include_str!("sdk-js-version");
+
+/// Classic parser-blocking IIFE (auto-runs setupWavedashSDK): the only way
+/// `window.Wavedash` exists before game scripts parse — module scripts are
+/// always deferred. jsdelivr sends ACAO * + CORP, satisfying COEP.
+fn inject_url() -> String {
+    format!(
+        "https://cdn.jsdelivr.net/npm/@wvdsh/sdk-js@{}/dist/inject.global.js",
+        SDK_JS_VERSION.trim()
+    )
+}
 
 /// `{{NAME}}` placeholders substitute data only — logic stays in the template.
 const SHELL_TEMPLATE: &str = include_str!("shell.html");
@@ -567,7 +574,7 @@ fn respond(
 /// escape keeps params values from closing the script tag.
 fn shell(script_src: &str, params_json: Option<&str>, config: &str) -> String {
     SHELL_TEMPLATE
-        .replace("{{INJECT_URL}}", INJECT_URL)
+        .replace("{{INJECT_URL}}", &inject_url())
         .replace(
             "{{ENTRYPOINT_PARAMS}}",
             &params_json.unwrap_or("null").replace('<', "\\u003c"),
@@ -589,9 +596,10 @@ fn js_string_literal(s: &str) -> String {
 fn inject_sdk(html: &str, config: &str) -> String {
     let tags = format!(
         "<script>window.__wavedashSdkConfig = {};</script>\
-<script src=\"{INJECT_URL}\" crossorigin=\"anonymous\"></script>\
+<script src=\"{}\" crossorigin=\"anonymous\"></script>\
 <script src=\"/__wavedash/dev.js\"></script>",
-        js_string_literal(config)
+        js_string_literal(config),
+        inject_url()
     );
     match head_insert_pos(&html.to_ascii_lowercase()) {
         Some(pos) => format!("{}{}{}", &html[..pos], tags, &html[pos..]),
@@ -661,5 +669,33 @@ fn lookup_content_type(path: &str) -> &'static str {
         _ => mime_guess::from_path(&lower)
             .first_raw()
             .unwrap_or("application/octet-stream"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_pinned_sdk_version_file_holds_one_bare_semver() {
+        let version = SDK_JS_VERSION.trim();
+        let parts: Vec<&str> = version.split('.').collect();
+        assert!(
+            parts.len() == 3
+                && parts
+                    .iter()
+                    .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())),
+            "src/dev/sdk-js-version must hold one bare version like 1.2.3, got {version:?}"
+        );
+    }
+
+    #[test]
+    fn the_inject_url_never_carries_the_version_files_trailing_newline() {
+        let url = inject_url();
+        assert!(!url.contains(char::is_whitespace), "{url:?}");
+        assert!(
+            url.contains(&format!("@wvdsh/sdk-js@{}/", SDK_JS_VERSION.trim())),
+            "{url:?}"
+        );
     }
 }
