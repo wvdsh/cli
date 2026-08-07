@@ -29,6 +29,7 @@
 //! project config at all.
 
 use anyhow::Result;
+use clap::ValueEnum;
 use colored::Colorize;
 use directories::BaseDirs;
 use serde::Deserialize;
@@ -474,6 +475,25 @@ impl EngineKind {
             EngineKind::JsDos => "JSDOS",
             EngineKind::Ruffle => "RUFFLE",
             EngineKind::RenPy => "RENPY",
+        }
+    }
+}
+
+// The API's third source, `WEB`, has no variant here: it's set server-side and
+// rejected from any client that claims it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum UploadSource {
+    #[default]
+    #[value(skip)]
+    Cli,
+    GodotPlugin,
+}
+
+impl UploadSource {
+    pub fn as_label(&self) -> &'static str {
+        match self {
+            UploadSource::Cli => "CLI",
+            UploadSource::GodotPlugin => "GODOT_PLUGIN",
         }
     }
 }
@@ -1804,5 +1824,12 @@ mod tests {
             config.executable_entrypoint_params().unwrap(),
             Some(serde_json::json!({ "executable": "game.swf" }))
         );
+    }
+
+    #[test]
+    fn upload_source_labels_are_the_ones_the_api_accepts() {
+        assert_eq!(UploadSource::default(), UploadSource::Cli);
+        assert_eq!(UploadSource::Cli.as_label(), "CLI");
+        assert_eq!(UploadSource::GodotPlugin.as_label(), "GODOT_PLUGIN");
     }
 }

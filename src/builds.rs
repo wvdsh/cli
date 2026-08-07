@@ -1,5 +1,5 @@
 use crate::auth::AuthManager;
-use crate::config::{self, WavedashConfig};
+use crate::config::{self, UploadSource, WavedashConfig};
 use crate::file_staging::FileStaging;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -43,6 +43,7 @@ struct BuildUploadInfo<'a> {
     entrypoint_params: Option<serde_json::Value>,
     message: Option<&'a str>,
     build_size_bytes: u64,
+    upload_source: UploadSource,
 }
 
 async fn get_temp_credentials(
@@ -59,6 +60,7 @@ async fn get_temp_credentials(
 
     let mut request_body = serde_json::json!({
         "buildSizeBytes": info.build_size_bytes,
+        "uploadSource": info.upload_source.as_label(),
     });
 
     if let Some(eng) = info.engine {
@@ -133,6 +135,7 @@ pub async fn handle_build_push(
     config_path: PathBuf,
     verbose: bool,
     message: Option<String>,
+    upload_source: UploadSource,
 ) -> Result<()> {
     // Load wavedash.toml config
     let wavedash_config = WavedashConfig::load(&config_path)?;
@@ -177,6 +180,7 @@ pub async fn handle_build_push(
             entrypoint_params: wavedash_config.executable_entrypoint_params()?,
             message: message.as_deref(),
             build_size_bytes: total_bytes,
+            upload_source,
         },
         &api_key,
     )
