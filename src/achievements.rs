@@ -23,6 +23,7 @@ struct Achievement {
     #[serde(rename = "displayName")]
     display_name: String,
     description: String,
+    image: String,
     secret: bool,
     #[serde(rename = "statId", skip_serializing_if = "Option::is_none")]
     stat_id: Option<String>,
@@ -341,6 +342,7 @@ mod tests {
                 "identifier": "FIRST_WIN",
                 "displayName": "First Win",
                 "description": "Win a match",
+                "image": "achievements/first-win.png",
                 "secret": false,
                 "statId": "wins-stat-id",
                 "statThreshold": 1
@@ -363,6 +365,7 @@ mod tests {
             identifier: "WELCOME".to_string(),
             display_name: "Welcome".to_string(),
             description: "Start the game".to_string(),
+            image: "achievements/welcome.png".to_string(),
             secret: false,
             stat_id: None,
             stat_threshold: None,
@@ -370,6 +373,7 @@ mod tests {
 
         let value = serde_json::to_value(achievement).expect("achievement should serialize");
         assert_eq!(value["displayName"], "Welcome");
+        assert_eq!(value["image"], "achievements/welcome.png");
         assert!(value.get("display_name").is_none());
         assert!(value.get("statId").is_none());
         assert!(value.get("statThreshold").is_none());
