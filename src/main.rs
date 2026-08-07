@@ -13,8 +13,8 @@ mod updater;
 mod welcome;
 
 use achievements::{
-    handle_achievement_create, handle_achievement_delete, handle_achievement_update,
-    CreateAchievementArgs, UpdateAchievementArgs,
+    handle_achievement_create, handle_achievement_delete, handle_achievement_list,
+    handle_achievement_update, CreateAchievementArgs, UpdateAchievementArgs,
 };
 use anyhow::Result;
 use auth::{login_with_browser, AuthManager, AuthSource};
@@ -348,6 +348,24 @@ enum StatCommands {
 
 #[derive(Subcommand)]
 enum AchievementCommands {
+    #[command(about = "List achievements for a game")]
+    List {
+        #[arg(
+            long = "game-id",
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
+    },
     #[command(about = "Create a new achievement for a game")]
     Create {
         #[arg(
@@ -665,6 +683,14 @@ async fn run() -> Result<()> {
         },
         Commands::Achievement { action } => {
             match action {
+                AchievementCommands::List {
+                    game_id,
+                    config,
+                    json,
+                } => {
+                    let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                    handle_achievement_list(&game_id, json).await?;
+                }
                 AchievementCommands::Create {
                     game_id,
                     config,
@@ -831,5 +857,33 @@ mod tests {
             "expected every --game-id arg to be checked, only saw: {:?}",
             checked
         );
+    }
+
+    #[test]
+    fn achievement_list_accepts_game_id_and_json_output() {
+        let cli = Cli::try_parse_from([
+            "wavedash",
+            "achievement",
+            "list",
+            "--game-id",
+            "game-id",
+            "--json",
+        ])
+        .expect("achievement list should be a valid command");
+
+        match cli.command {
+            Some(Commands::Achievement {
+                action:
+                    AchievementCommands::List {
+                        game_id,
+                        json,
+                        ..
+                    },
+            }) => {
+                assert_eq!(game_id.as_deref(), Some("game-id"));
+                assert!(json);
+            }
+            _ => panic!("parsed the wrong command"),
+        }
     }
 }

@@ -1,16 +1,38 @@
 use crate::auth::require_api_key;
 use crate::config;
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use comfy_table::modifiers::UTF8_ROUND_CORNERS;
+use comfy_table::presets::UTF8_FULL;
+use comfy_table::{Cell, ContentArrangement, Table};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::Path;
 
 #[derive(Debug, Deserialize)]
+struct CreatedAchievement {
+    _id: String,
+    identifier: String,
+    #[serde(rename = "displayName")]
+    display_name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 struct Achievement {
     _id: String,
     identifier: String,
     #[serde(rename = "displayName")]
     display_name: String,
+    description: String,
+    secret: bool,
+    #[serde(rename = "statId", skip_serializing_if = "Option::is_none")]
+    stat_id: Option<String>,
+    #[serde(rename = "statThreshold", skip_serializing_if = "Option::is_none")]
+    stat_threshold: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AchievementsResponse {
+    achievements: Vec<Achievement>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,6 +113,65 @@ pub struct CreateAchievementArgs<'a> {
     pub image_path: Option<&'a Path>,
 }
 
+pub async fn handle_achievement_list(game_id: &str, json: bool) -> Result<()> {
+    let api_key = require_api_key()?;
+    let client = config::create_http_client()?;
+    let api_host = config::get("api_host")?;
+    let url = format!("{}/api/games/{}/achievements", api_host, game_id);
+
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await?;
+
+    let resp = config::check_api_response(resp).await?;
+    let data: AchievementsResponse = resp.json().await?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&data.achievements)?);
+        return Ok(());
+    }
+
+    if data.achievements.is_empty() {
+        println!("No achievements found.");
+        return Ok(());
+    }
+
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .apply_modifier(UTF8_ROUND_CORNERS)
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(vec![
+            Cell::new("ID"),
+            Cell::new("Identifier"),
+            Cell::new("Title"),
+            Cell::new("Description"),
+            Cell::new("Secret"),
+            Cell::new("Stat ID"),
+            Cell::new("Threshold"),
+        ]);
+
+    for achievement in data.achievements {
+        table.add_row(vec![
+            achievement._id,
+            achievement.identifier,
+            achievement.display_name,
+            achievement.description,
+            if achievement.secret { "yes" } else { "no" }.to_string(),
+            achievement.stat_id.unwrap_or_else(|| "-".to_string()),
+            achievement
+                .stat_threshold
+                .map(|threshold| threshold.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ]);
+    }
+
+    println!("{table}");
+    Ok(())
+}
+
 pub async fn handle_achievement_create(args: CreateAchievementArgs<'_>) -> Result<()> {
     let api_key = require_api_key()?;
 
@@ -133,7 +214,7 @@ pub async fn handle_achievement_create(args: CreateAchievementArgs<'_>) -> Resul
         .await?;
 
     let resp = config::check_api_response(resp).await?;
-    let achievement: Achievement = resp.json().await?;
+    let achievement: CreatedAchievement = resp.json().await?;
     println!(
         "✓ Created achievement \"{}\" (id: {}, identifier: {})",
         achievement.display_name, achievement._id, achievement.identifier
@@ -246,4 +327,51 @@ pub async fn handle_achievement_delete(
     config::check_api_response(resp).await?;
     println!("✓ Deleted achievement {}", achievement_id);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_the_achievement_list_response() {
+        let response: AchievementsResponse = serde_json::from_value(json!({
+            "achievements": [{
+                "_id": "achievement-id",
+                "identifier": "FIRST_WIN",
+                "displayName": "First Win",
+                "description": "Win a match",
+                "secret": false,
+                "statId": "wins-stat-id",
+                "statThreshold": 1
+            }]
+        }))
+        .expect("the API response should deserialize");
+
+        let achievement = &response.achievements[0];
+        assert_eq!(achievement._id, "achievement-id");
+        assert_eq!(achievement.identifier, "FIRST_WIN");
+        assert_eq!(achievement.display_name, "First Win");
+        assert_eq!(achievement.stat_id.as_deref(), Some("wins-stat-id"));
+        assert_eq!(achievement.stat_threshold, Some(1.0));
+    }
+
+    #[test]
+    fn json_output_uses_api_field_names_and_omits_empty_stat_fields() {
+        let achievement = Achievement {
+            _id: "achievement-id".to_string(),
+            identifier: "WELCOME".to_string(),
+            display_name: "Welcome".to_string(),
+            description: "Start the game".to_string(),
+            secret: false,
+            stat_id: None,
+            stat_threshold: None,
+        };
+
+        let value = serde_json::to_value(achievement).expect("achievement should serialize");
+        assert_eq!(value["displayName"], "Welcome");
+        assert!(value.get("display_name").is_none());
+        assert!(value.get("statId").is_none());
+        assert!(value.get("statThreshold").is_none());
+    }
 }
