@@ -853,7 +853,7 @@ mod tests {
         walk(&cli, &["wavedash".to_string()], &mut checked);
 
         assert!(
-            checked.len() >= 7,
+            checked.len() >= 8,
             "expected every --game-id arg to be checked, only saw: {:?}",
             checked
         );
