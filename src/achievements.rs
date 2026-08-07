@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::Path;
 
+/// The create response, narrowed to the fields printed by the command. This is
+/// deliberately separate from `Achievement`, whose list payload is larger.
 #[derive(Debug, Deserialize)]
 struct CreatedAchievement {
     _id: String,
@@ -160,7 +162,7 @@ pub async fn handle_achievement_list(game_id: &str, json: bool) -> Result<()> {
             achievement.identifier,
             achievement.display_name,
             achievement.description,
-            if achievement.secret { "yes" } else { "no" }.to_string(),
+            (if achievement.secret { "yes" } else { "no" }).to_string(),
             achievement.stat_id.unwrap_or_else(|| "-".to_string()),
             achievement
                 .stat_threshold
@@ -356,6 +358,26 @@ mod tests {
         assert_eq!(achievement.display_name, "First Win");
         assert_eq!(achievement.stat_id.as_deref(), Some("wins-stat-id"));
         assert_eq!(achievement.stat_threshold, Some(1.0));
+    }
+
+    #[test]
+    fn parses_an_achievement_without_a_stat_link() {
+        let response: AchievementsResponse = serde_json::from_value(json!({
+            "achievements": [{
+                "_id": "achievement-id",
+                "identifier": "WELCOME",
+                "displayName": "Welcome",
+                "description": "Start the game",
+                "image": "",
+                "secret": true
+            }]
+        }))
+        .expect("an achievement with no stat link should deserialize");
+
+        let achievement = &response.achievements[0];
+        assert!(achievement.secret);
+        assert_eq!(achievement.stat_id, None);
+        assert_eq!(achievement.stat_threshold, None);
     }
 
     #[test]
