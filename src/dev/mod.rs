@@ -6,7 +6,7 @@ use serde::Deserialize;
 use walkdir::WalkDir;
 
 use crate::auth::{generate_state, AuthManager};
-use crate::config::{self, EngineKind, WavedashConfig};
+use crate::config::{self, EngineKind, UploadSource, WavedashConfig};
 use crate::file_staging::FileStaging;
 
 mod server;
@@ -23,13 +23,16 @@ async fn create_local_build(
     engine: Option<&str>,
     engine_version: Option<&str>,
     entrypoint: Option<&str>,
+    upload_source: UploadSource,
     api_key: &str,
 ) -> Result<CreateLocalBuildResponse> {
     let client = config::create_http_client()?;
     let api_host = config::get("api_host")?;
     let url = format!("{}/api/games/{}/builds/create-local", api_host, game_id);
 
-    let mut request_body = serde_json::json!({});
+    let mut request_body = serde_json::json!({
+        "uploadSource": upload_source.as_label(),
+    });
     if let Some(eng) = engine {
         request_body["engine"] = serde_json::json!(eng);
     }
@@ -54,7 +57,12 @@ async fn create_local_build(
 
 const DEFAULT_CONFIG: &str = "./wavedash.toml";
 
-pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bool) -> Result<()> {
+pub async fn handle_dev(
+    config_path: Option<PathBuf>,
+    verbose: bool,
+    no_open: bool,
+    upload_source: UploadSource,
+) -> Result<()> {
     let auth_manager = AuthManager::new()?;
     let api_key = auth_manager
         .get_api_key()
@@ -128,6 +136,7 @@ pub async fn handle_dev(config_path: Option<PathBuf>, verbose: bool, no_open: bo
         engine_kind.map(|e| e.as_label()),
         wavedash_config.engine_version()?,
         entrypoint.as_deref(),
+        upload_source,
         &api_key,
     )
     .await?;

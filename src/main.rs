@@ -22,7 +22,7 @@ use builds::handle_build_push;
 use clap::{Parser, Subcommand};
 use clear_playtest_data::{handle_clear_playtest_data, ClearPlaytestDataArgs};
 use colored::Colorize;
-use config::resolve_game_id;
+use config::{resolve_game_id, UploadSource};
 use dev::handle_dev;
 use init::{
     handle_init, handle_project_create, handle_project_list, handle_team_create, handle_team_list,
@@ -87,6 +87,13 @@ enum Commands {
             help = "Don't automatically open the browser; just print the local URL"
         )]
         no_open: bool,
+        #[arg(
+            long = "upload-source",
+            value_enum,
+            hide = true,
+            help = "Attribute the build to the tool running the CLI instead of the CLI itself"
+        )]
+        upload_source: Option<UploadSource>,
     },
     #[command(
         about = "Publish an uploaded build to wavedash.com",
@@ -245,6 +252,13 @@ enum BuildCommands {
         config: PathBuf,
         #[arg(short = 'm', long = "message", help = "Build message")]
         message: Option<String>,
+        #[arg(
+            long = "upload-source",
+            value_enum,
+            hide = true,
+            help = "Attribute the build to the tool running the CLI instead of the CLI itself"
+        )]
+        upload_source: Option<UploadSource>,
     },
 }
 
@@ -606,12 +620,32 @@ async fn run() -> Result<()> {
             }
         }
         Commands::Build { action } => match action {
-            BuildCommands::Push { config, message } => {
-                handle_build_push(config, cli.verbose, message).await?;
+            BuildCommands::Push {
+                config,
+                message,
+                upload_source,
+            } => {
+                handle_build_push(
+                    config,
+                    cli.verbose,
+                    message,
+                    upload_source.unwrap_or_default(),
+                )
+                .await?;
             }
         },
-        Commands::Dev { config, no_open } => {
-            handle_dev(config, cli.verbose, no_open).await?;
+        Commands::Dev {
+            config,
+            no_open,
+            upload_source,
+        } => {
+            handle_dev(
+                config,
+                cli.verbose,
+                no_open,
+                upload_source.unwrap_or_default(),
+            )
+            .await?;
         }
         Commands::Publish {
             config,
@@ -884,6 +918,99 @@ mod tests {
                 assert!(json);
             }
             _ => panic!("parsed the wrong command"),
+        }
+    }
+
+    #[test]
+    fn upload_source_is_hidden_and_only_offers_the_godot_plugin() {
+        fn walk(cmd: &clap::Command, path: &[String], found: &mut Vec<String>) {
+            if let Some(arg) = cmd
+                .get_arguments()
+                .find(|arg| arg.get_long() == Some("upload-source"))
+            {
+                let command = path.join(" ");
+                assert!(
+                    arg.is_hide_set(),
+                    "`{}` lists --upload-source in its help",
+                    command
+                );
+                let values: Vec<String> = arg
+                    .get_possible_values()
+                    .into_iter()
+                    .map(|value| value.get_name().to_string())
+                    .collect();
+                assert_eq!(
+                    values,
+                    ["godot-plugin"],
+                    "`{}` offers a source other than the Godot plugin's",
+                    command
+                );
+                found.push(command);
+            }
+
+            for sub in cmd.get_subcommands() {
+                let mut sub_path = path.to_vec();
+                sub_path.push(sub.get_name().to_string());
+                walk(sub, &sub_path, found);
+            }
+        }
+
+        let mut found = Vec::new();
+        walk(&Cli::command(), &["wavedash".to_string()], &mut found);
+        found.sort();
+
+        assert_eq!(
+            found,
+            ["wavedash build push", "wavedash dev"],
+            "every command that creates a build row should be able to name its source"
+        );
+    }
+
+    #[test]
+    fn upload_source_parses_the_plugin_and_defaults_to_the_cli() {
+        fn push_source(argv: &[&str]) -> Option<UploadSource> {
+            let parsed = Cli::try_parse_from(argv).expect("should parse");
+            let Some(Commands::Build {
+                action: BuildCommands::Push { upload_source, .. },
+            }) = parsed.command
+            else {
+                panic!("`{:?}` did not parse as `build push`", argv);
+            };
+            upload_source
+        }
+
+        assert_eq!(
+            push_source(&[
+                "wavedash",
+                "build",
+                "push",
+                "--upload-source",
+                "godot-plugin"
+            ]),
+            Some(UploadSource::GodotPlugin)
+        );
+        assert_eq!(push_source(&["wavedash", "build", "push"]), None);
+        assert_eq!(
+            push_source(&["wavedash", "build", "push"]).unwrap_or_default(),
+            UploadSource::Cli
+        );
+
+        // Not `try_parse_from`: `expect_err` needs the Ok type to be `Debug`, and
+        // `Cli` isn't — the fix is here, not a `derive(Debug)` on `Cli`.
+        for rejected in ["cli", "CLI", "web", "WEB", "godot", "GODOT_PLUGIN", ""] {
+            let err = Cli::command()
+                .try_get_matches_from(["wavedash", "build", "push", "--upload-source", rejected])
+                .expect_err(&format!(
+                    "`build push` accepted --upload-source {:?}",
+                    rejected
+                ));
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::InvalidValue,
+                "--upload-source {:?} was rejected for the wrong reason: {}",
+                rejected,
+                err
+            );
         }
     }
 }
