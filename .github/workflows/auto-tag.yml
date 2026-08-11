@@ -17,31 +17,16 @@ jobs:
         with:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
-      - name: Check the play-reader App credentials are present
-        env:
-          CLIENT_ID: ${{ secrets.PLAY_READER_APP_CLIENT_ID }}
-          PRIVATE_KEY: ${{ secrets.PLAY_READER_APP_PRIVATE_KEY }}
-        run: |
-          if [ -z "$CLIENT_ID" ] || [ -z "$PRIVATE_KEY" ]; then
-            echo "::error::PLAY_READER_APP_CLIENT_ID / PLAY_READER_APP_PRIVATE_KEY are not set on this repo. They belong to the play-reader GitHub App this workflow uses to read the sdk-js version play ships — see the Releases section of CLAUDE.md for the one-time setup."
-            exit 1
-          fi
-
-      - name: Mint a read-only token for wvdsh/play
-        id: play-token
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ secrets.PLAY_READER_APP_CLIENT_ID }}
-          private-key: ${{ secrets.PLAY_READER_APP_PRIVATE_KEY }}
-          owner: wvdsh
-          repositories: play
-          permission-contents: read
-
       - name: Verify the pinned sdk-js matches the version play ships
         env:
-          GH_TOKEN: ${{ steps.play-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.PLAY_READ_PAT }}
         run: |
           set -euo pipefail
+
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::PLAY_READ_PAT is not set on this repo. It's a fine-grained PAT scoped to wvdsh/play with Contents: Read-only, used to read the sdk-js version play ships — see the Releases section of CLAUDE.md."
+            exit 1
+          fi
 
           pinned=$(tr -d '[:space:]' < src/dev/sdk-js-version)
 
