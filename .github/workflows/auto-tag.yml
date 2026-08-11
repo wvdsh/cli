@@ -16,7 +16,61 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-      
+
+      - name: Check the play-reader App credentials are present
+        env:
+          CLIENT_ID: ${{ secrets.PLAY_READER_APP_CLIENT_ID }}
+          PRIVATE_KEY: ${{ secrets.PLAY_READER_APP_PRIVATE_KEY }}
+        run: |
+          if [ -z "$CLIENT_ID" ] || [ -z "$PRIVATE_KEY" ]; then
+            echo "::error::PLAY_READER_APP_CLIENT_ID / PLAY_READER_APP_PRIVATE_KEY are not set on this repo. They belong to the play-reader GitHub App this workflow uses to read the sdk-js version play ships — see the Releases section of CLAUDE.md for the one-time setup."
+            exit 1
+          fi
+
+      - name: Mint a read-only token for wvdsh/play
+        id: play-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.PLAY_READER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PLAY_READER_APP_PRIVATE_KEY }}
+          owner: wvdsh
+          repositories: play
+          permission-contents: read
+
+      - name: Verify the pinned sdk-js matches the version play ships
+        env:
+          GH_TOKEN: ${{ steps.play-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          pinned=$(tr -d '[:space:]' < src/dev/sdk-js-version)
+
+          # play deploys prod on `release: published`, so its latest release is what
+          # is live — not the tip of its main branch.
+          tag=$(gh api repos/wvdsh/play/releases/latest --jq .tag_name)
+          gh api -H "Accept: application/vnd.github.raw" \
+            "repos/wvdsh/play/contents/package-lock.json?ref=$tag" \
+            > "$RUNNER_TEMP/play-lock.json"
+          # package.json only carries a caret range, so read the resolved version.
+          shipped=$(jq -r '.packages["node_modules/@wvdsh/sdk-js"].version' "$RUNNER_TEMP/play-lock.json")
+
+          echo "cli pins $pinned; play $tag ships $shipped"
+
+          if [ -z "$pinned" ]; then
+            echo "::error::src/dev/sdk-js-version is empty"
+            exit 1
+          fi
+
+          if [ -z "$shipped" ] || [ "$shipped" = "null" ]; then
+            echo "::error::Could not read @wvdsh/sdk-js out of play $tag's package-lock.json"
+            exit 1
+          fi
+
+          if [ "$pinned" != "$shipped" ]; then
+            echo "::error::wavedash dev would inject @wvdsh/sdk-js@$pinned but play $tag ships $shipped. Run scripts/bump-sdk-js.sh $shipped, verify a game boots with wavedash dev, then push the bump to retry the release."
+            exit 1
+          fi
+
       - name: Get version
         id: get_version
         run: |
