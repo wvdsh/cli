@@ -1,6 +1,7 @@
 use crate::auth::AuthManager;
 use crate::config::{self, WavedashConfig};
 use anyhow::Result;
+use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -43,6 +44,7 @@ pub struct PublishArgs {
     pub removed: Vec<String>,
     pub fixed: Vec<String>,
     pub adjusted: Vec<String>,
+    pub yes: bool,
 }
 
 fn trim_optional(value: Option<String>) -> Option<String> {
@@ -105,20 +107,45 @@ pub async fn handle_publish(args: PublishArgs) -> Result<()> {
         removed,
         fixed,
         adjusted,
+        yes,
     } = args;
 
     let wavedash_config = WavedashConfig::load(&config_path)?;
+    let game_id = wavedash_config.game_id()?;
 
     let auth_manager = AuthManager::new()?;
     let api_key = auth_manager
         .get_api_key()
         .ok_or_else(|| anyhow::anyhow!("Not authenticated. Run 'wavedash auth login' first."))?;
 
+    if !yes {
+        if crate::is_non_interactive() {
+            anyhow::bail!(
+                "Refusing to publish without confirmation.\n\
+                 Re-run with --yes (alias --force / -y) to proceed non-interactively."
+            );
+        }
+
+        println!(
+            "{} This will make build {} live for players of game {}.",
+            "Warning:".yellow().bold(),
+            build_id.bold(),
+            game_id.bold()
+        );
+        let confirmed = cliclack::confirm("Are you sure you want to continue?")
+            .initial_value(false)
+            .interact()?;
+        if !confirmed {
+            println!("Aborted. Nothing was published.");
+            return Ok(());
+        }
+    }
+
     let client = config::create_http_client()?;
     let api_host = config::get("api_host")?;
     let url = format!(
         "{}/api/games/{}/builds/{}/publish",
-        api_host, wavedash_config.game_id()?, build_id
+        api_host, game_id, build_id
     );
 
     let notes = build_release_notes(title, summary, added, removed, fixed, adjusted);

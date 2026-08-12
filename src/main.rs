@@ -124,6 +124,13 @@ enum Commands {
         fixed: Vec<String>,
         #[arg(long, help = "Adjusted change item", action = clap::ArgAction::Append, num_args = 1)]
         adjusted: Vec<String>,
+        #[arg(
+            long = "yes",
+            short = 'y',
+            visible_alias = "force",
+            help = "Skip confirmation (required when non-interactive)"
+        )]
+        yes: bool,
     },
     Team {
         #[command(subcommand)]
@@ -638,6 +645,7 @@ async fn run() -> Result<()> {
             removed,
             fixed,
             adjusted,
+            yes,
         } => {
             handle_publish(PublishArgs {
                 config_path: config,
@@ -648,6 +656,7 @@ async fn run() -> Result<()> {
                 removed,
                 fixed,
                 adjusted,
+                yes,
             })
             .await?;
         }
