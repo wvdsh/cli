@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'Cargo.toml'
+      - 'src/dev/sdk-js-version'
 
 jobs:
   tag:
@@ -16,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-      
+
       - name: Get version
         id: get_version
         run: |
@@ -26,10 +27,37 @@ jobs:
           echo "Detected version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      - name: Check if version is already tagged
+        id: tagged
+        run: |
+          if git ls-remote --exit-code origin "refs/tags/${{ steps.get_version.outputs.version }}" > /dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Verify the pinned sdk-js matches the version play ships
+        if: steps.tagged.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.PLAY_READ_PAT }}
+        run: |
+          set -euo pipefail
+          pinned=$(tr -d '[:space:]' < src/dev/sdk-js-version)
+          # play deploys prod on `release: published`, so its latest release is what's live
+          tag=$(gh api repos/wvdsh/play/releases/latest --jq .tag_name)
+          shipped=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/wvdsh/play/contents/package-lock.json?ref=$tag" \
+            | jq -er '.packages["node_modules/@wvdsh/sdk-js"].version')
+          echo "cli pins $pinned; play $tag ships $shipped"
+          if [ "$pinned" != "$shipped" ]; then
+            echo "::error::wavedash dev would inject @wvdsh/sdk-js@$pinned but play $tag ships $shipped. Run scripts/bump-sdk-js.sh $shipped, verify a game boots with wavedash dev, then push the bump to retry the release."
+            exit 1
+          fi
+
       - name: Create and Push Version Tag
+        if: steps.tagged.outputs.exists == 'false'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.get_version.outputs.version }}" -m "Release ${{ steps.get_version.outputs.version }}" || echo "Tag already exists"
-          git push origin "${{ steps.get_version.outputs.version }}" || echo "Tag already pushed"
-
+          git tag -a "${{ steps.get_version.outputs.version }}" -m "Release ${{ steps.get_version.outputs.version }}"
+          git push origin "${{ steps.get_version.outputs.version }}"
