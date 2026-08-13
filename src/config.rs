@@ -283,7 +283,7 @@ impl Field {
 /// Single place the notice prefix lives, since overrides get announced both from
 /// the config accessors and from `resolve_game_id`.
 fn print_override_notice(text: &str) {
-    println!("{} {}", "env override:".yellow(), text);
+    eprintln!("{} {}", "env override:".yellow(), text);
 }
 
 fn game_id_notice(value: &str) -> String {
