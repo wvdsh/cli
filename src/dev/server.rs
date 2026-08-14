@@ -28,11 +28,21 @@ const SDK_JS_VERSION: &str = include_str!("sdk-js-version");
 /// Classic parser-blocking IIFE (auto-runs setupWavedashSDK): the only way
 /// `window.Wavedash` exists before game scripts parse — module scripts are
 /// always deferred. jsdelivr sends ACAO * + CORP, satisfying COEP.
-fn inject_url() -> String {
+fn cdn_inject_url() -> String {
     format!(
         "https://cdn.jsdelivr.net/npm/@wvdsh/sdk-js@{}/dist/inject.global.js",
         SDK_JS_VERSION.trim()
     )
+}
+
+/// Same-origin, which COEP allows without the CORP a cross-origin build needs.
+const LOCAL_SDK_URL: &str = "/__wavedash/sdk.js";
+
+fn inject_url(sdk_js: Option<&Path>) -> String {
+    match sdk_js {
+        Some(_) => LOCAL_SDK_URL.to_string(),
+        None => cdn_inject_url(),
+    }
 }
 
 /// `{{NAME}}` placeholders substitute data only — logic stays in the template.
@@ -64,6 +74,8 @@ pub struct ServeConfig {
     pub client: reqwest::Client,
     /// Engine builds boot via play's real default entrypoint — the prod path.
     pub engine_entry: Option<EngineEntry>,
+    /// Local sdk-js bundle to serve in place of the pinned CDN build.
+    pub sdk_js: Option<PathBuf>,
     /// Backend public keys (/.well-known/jwks.json), fetched once on demand.
     pub jwks: tokio::sync::OnceCell<jsonwebtoken::jwk::JwkSet>,
 }
@@ -100,6 +112,7 @@ pub async fn run(listener: TcpListener, cfg: ServeConfig) -> Result<()> {
     let mut app = Router::new()
         .route("/__wavedash/callback", get(handle_callback))
         .route("/__wavedash/dev.js", get(handle_dev_js))
+        .route(LOCAL_SDK_URL, get(handle_sdk_js))
         .route("/auth/refresh", post(handle_auth_refresh))
         .route("/", get(handle_index))
         .fallback(get(handle_static))
@@ -490,6 +503,7 @@ async fn handle_index(
 
     if let Some(engine_entry) = &cfg.engine_entry {
         let html = shell(
+            cfg.sdk_js.as_deref(),
             &engine_entry.entrypoint_url,
             Some(&engine_entry.params_json),
             &config,
@@ -497,7 +511,12 @@ async fn handle_index(
         return respond(StatusCode::OK, HTML, None, html);
     }
     if cfg.entry.ends_with(".js") {
-        let html = shell(&format!("/{}", cfg.entry), None, &config);
+        let html = shell(
+            cfg.sdk_js.as_deref(),
+            &format!("/{}", cfg.entry),
+            None,
+            &config,
+        );
         return respond(StatusCode::OK, HTML, None, html);
     }
     // The HTML entry serves at its real path so relative assets resolve.
@@ -529,6 +548,22 @@ async fn handle_dev_js() -> Response {
     respond(StatusCode::OK, "text/javascript; charset=utf-8", None, DEV_JS)
 }
 
+/// Read per request, so rebuilding sdk-js only needs a page reload.
+async fn handle_sdk_js(State(cfg): State<Arc<ServeConfig>>) -> Response {
+    let Some(path) = cfg.sdk_js.as_deref() else {
+        return respond(StatusCode::NOT_FOUND, TEXT, None, "Not Found");
+    };
+    match std::fs::read(path) {
+        Ok(bytes) => respond(StatusCode::OK, "text/javascript; charset=utf-8", None, bytes),
+        Err(e) => respond(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            TEXT,
+            None,
+            format!("could not read {}: {e}", path.display()),
+        ),
+    }
+}
+
 /// Authed HTML navigations get the config global + SDK tags injected (prod's
 /// embed.js mechanism); everything else streams as-is.
 fn serve_file(cfg: &ServeConfig, url_path: &str, config: Option<&str>) -> Response {
@@ -542,7 +577,11 @@ fn serve_file(cfg: &ServeConfig, url_path: &str, config: Option<&str>) -> Respon
     let (content_type, encoding) = content_type_and_encoding(url_path);
     if let Some(config) = config {
         if encoding.is_none() && content_type.starts_with("text/html") {
-            let injected = inject_sdk(&String::from_utf8_lossy(&bytes), config);
+            let injected = inject_sdk(
+                cfg.sdk_js.as_deref(),
+                &String::from_utf8_lossy(&bytes),
+                config,
+            );
             return respond(StatusCode::OK, HTML, None, injected);
         }
     }
@@ -572,9 +611,14 @@ fn respond(
 /// Boot shell: play's real default entrypoint for engine builds (the prod
 /// path), the game's own script with null params for `.js` entries. The `<`
 /// escape keeps params values from closing the script tag.
-fn shell(script_src: &str, params_json: Option<&str>, config: &str) -> String {
+fn shell(
+    sdk_js: Option<&Path>,
+    script_src: &str,
+    params_json: Option<&str>,
+    config: &str,
+) -> String {
     SHELL_TEMPLATE
-        .replace("{{INJECT_URL}}", &inject_url())
+        .replace("{{INJECT_URL}}", &inject_url(sdk_js))
         .replace(
             "{{ENTRYPOINT_PARAMS}}",
             &params_json.unwrap_or("null").replace('<', "\\u003c"),
@@ -593,13 +637,13 @@ fn js_string_literal(s: &str) -> String {
 
 /// Inject the config global + SDK bundle + init gate right after
 /// `<head ...>`, or prepended if there's no head.
-fn inject_sdk(html: &str, config: &str) -> String {
+fn inject_sdk(sdk_js: Option<&Path>, html: &str, config: &str) -> String {
     let tags = format!(
         "<script>window.__wavedashSdkConfig = {};</script>\
 <script src=\"{}\" crossorigin=\"anonymous\"></script>\
 <script src=\"/__wavedash/dev.js\"></script>",
         js_string_literal(config),
-        inject_url()
+        inject_url(sdk_js)
     );
     match head_insert_pos(&html.to_ascii_lowercase()) {
         Some(pos) => format!("{}{}{}", &html[..pos], tags, &html[pos..]),
@@ -691,11 +735,18 @@ mod tests {
 
     #[test]
     fn the_inject_url_never_carries_the_version_files_trailing_newline() {
-        let url = inject_url();
+        let url = inject_url(None);
         assert!(!url.contains(char::is_whitespace), "{url:?}");
         assert!(
             url.contains(&format!("@wvdsh/sdk-js@{}/", SDK_JS_VERSION.trim())),
             "{url:?}"
         );
+    }
+
+    #[test]
+    fn a_local_bundle_is_served_from_this_origin() {
+        let url = inject_url(Some(Path::new("/tmp/sdk-js/dist/inject.global.js")));
+        assert_eq!(url, LOCAL_SDK_URL);
+        assert!(!url.contains("jsdelivr"), "{url:?}");
     }
 }

@@ -94,6 +94,13 @@ enum Commands {
             help = "Attribute the build to the tool running the CLI instead of the CLI itself"
         )]
         upload_source: Option<UploadSource>,
+        #[arg(
+            long = "sdk-js",
+            value_name = "PATH",
+            hide = true,
+            help = "Serve a local sdk-js build instead of the pinned CDN one — an inject.global.js, or a directory holding it"
+        )]
+        sdk_js: Option<PathBuf>,
     },
     #[command(
         about = "Publish an uploaded build to wavedash.com",
@@ -645,12 +652,14 @@ async fn run() -> Result<()> {
             config,
             no_open,
             upload_source,
+            sdk_js,
         } => {
             handle_dev(
                 config,
                 cli.verbose,
                 no_open,
                 upload_source.unwrap_or_default(),
+                sdk_js,
             )
             .await?;
         }
