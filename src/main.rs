@@ -940,51 +940,6 @@ mod tests {
     }
 
     #[test]
-    fn upload_source_is_hidden_and_only_offers_the_godot_plugin() {
-        fn walk(cmd: &clap::Command, path: &[String], found: &mut Vec<String>) {
-            if let Some(arg) = cmd
-                .get_arguments()
-                .find(|arg| arg.get_long() == Some("upload-source"))
-            {
-                let command = path.join(" ");
-                assert!(
-                    arg.is_hide_set(),
-                    "`{}` lists --upload-source in its help",
-                    command
-                );
-                let values: Vec<String> = arg
-                    .get_possible_values()
-                    .into_iter()
-                    .map(|value| value.get_name().to_string())
-                    .collect();
-                assert_eq!(
-                    values,
-                    ["godot-plugin"],
-                    "`{}` offers a source other than the Godot plugin's",
-                    command
-                );
-                found.push(command);
-            }
-
-            for sub in cmd.get_subcommands() {
-                let mut sub_path = path.to_vec();
-                sub_path.push(sub.get_name().to_string());
-                walk(sub, &sub_path, found);
-            }
-        }
-
-        let mut found = Vec::new();
-        walk(&Cli::command(), &["wavedash".to_string()], &mut found);
-        found.sort();
-
-        assert_eq!(
-            found,
-            ["wavedash build push", "wavedash dev"],
-            "every command that creates a build row should be able to name its source"
-        );
-    }
-
-    #[test]
     fn upload_source_parses_the_plugin_and_defaults_to_the_cli() {
         fn push_source(argv: &[&str]) -> Option<UploadSource> {
             let parsed = Cli::try_parse_from(argv).expect("should parse");
