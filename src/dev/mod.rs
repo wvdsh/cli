@@ -57,12 +57,31 @@ async fn create_local_build(
 
 const DEFAULT_CONFIG: &str = "./wavedash.toml";
 
+fn resolve_sdk_js(path: PathBuf) -> Result<PathBuf> {
+    const BUNDLE: &str = "inject.global.js";
+    let candidates = if path.is_dir() {
+        vec![path.join("dist").join(BUNDLE), path.join(BUNDLE)]
+    } else {
+        vec![path.clone()]
+    };
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| anyhow::anyhow!("no {BUNDLE} found at {}", path.display()))
+}
+
 pub async fn handle_dev(
     config_path: Option<PathBuf>,
     verbose: bool,
     no_open: bool,
     upload_source: UploadSource,
+    sdk_js: Option<PathBuf>,
 ) -> Result<()> {
+    let sdk_js = sdk_js.map(resolve_sdk_js).transpose()?;
+    if let Some(path) = &sdk_js {
+        println!("  Serving sdk-js from {}", path.display());
+    }
+
     let auth_manager = AuthManager::new()?;
     let api_key = auth_manager
         .get_api_key()
@@ -205,6 +224,7 @@ pub async fn handle_dev(
             client,
             engine_entry,
             jwks: tokio::sync::OnceCell::new(),
+            sdk_js,
         },
     )
     .await
