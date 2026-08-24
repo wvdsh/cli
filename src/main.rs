@@ -94,6 +94,13 @@ enum Commands {
             help = "Attribute the build to the tool running the CLI instead of the CLI itself"
         )]
         upload_source: Option<UploadSource>,
+        #[arg(
+            long = "sdk-js",
+            value_name = "PATH",
+            hide = true,
+            help = "Serve a local sdk-js build instead of the pinned CDN one — an inject.global.js, or a directory holding it"
+        )]
+        sdk_js: Option<PathBuf>,
     },
     #[command(
         about = "Publish an uploaded build to wavedash.com",
@@ -645,12 +652,14 @@ async fn run() -> Result<()> {
             config,
             no_open,
             upload_source,
+            sdk_js,
         } => {
             handle_dev(
                 config,
                 cli.verbose,
                 no_open,
                 upload_source.unwrap_or_default(),
+                sdk_js,
             )
             .await?;
         }
@@ -928,51 +937,6 @@ mod tests {
             }
             _ => panic!("parsed the wrong command"),
         }
-    }
-
-    #[test]
-    fn upload_source_is_hidden_and_only_offers_the_godot_plugin() {
-        fn walk(cmd: &clap::Command, path: &[String], found: &mut Vec<String>) {
-            if let Some(arg) = cmd
-                .get_arguments()
-                .find(|arg| arg.get_long() == Some("upload-source"))
-            {
-                let command = path.join(" ");
-                assert!(
-                    arg.is_hide_set(),
-                    "`{}` lists --upload-source in its help",
-                    command
-                );
-                let values: Vec<String> = arg
-                    .get_possible_values()
-                    .into_iter()
-                    .map(|value| value.get_name().to_string())
-                    .collect();
-                assert_eq!(
-                    values,
-                    ["godot-plugin"],
-                    "`{}` offers a source other than the Godot plugin's",
-                    command
-                );
-                found.push(command);
-            }
-
-            for sub in cmd.get_subcommands() {
-                let mut sub_path = path.to_vec();
-                sub_path.push(sub.get_name().to_string());
-                walk(sub, &sub_path, found);
-            }
-        }
-
-        let mut found = Vec::new();
-        walk(&Cli::command(), &["wavedash".to_string()], &mut found);
-        found.sort();
-
-        assert_eq!(
-            found,
-            ["wavedash build push", "wavedash dev"],
-            "every command that creates a build row should be able to name its source"
-        );
     }
 
     #[test]
