@@ -429,7 +429,7 @@ enum AchievementCommands {
         threshold: Option<f64>,
         #[arg(
             long,
-            help = "Path to an image file (jpg, jpeg, png, webp) to use as the achievement icon"
+            help = "Path to an image file (jpg, jpeg, png, webp, avif) to use as the achievement icon"
         )]
         image: Option<PathBuf>,
     },
@@ -465,7 +465,7 @@ enum AchievementCommands {
         triggered_by_stat_id: Option<String>,
         #[arg(long, help = "Stat threshold")]
         threshold: Option<f64>,
-        #[arg(long, help = "Path to a new image file (jpg, jpeg, png, webp)")]
+        #[arg(long, help = "Path to a new image file (jpg, jpeg, png, webp, avif)")]
         image: Option<PathBuf>,
     },
     #[command(about = "Delete an achievement")]

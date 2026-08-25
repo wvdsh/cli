@@ -39,17 +39,14 @@ struct AchievementsResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct ImageUploadUrlResponse {
-    #[serde(rename = "uploadUrl")]
-    upload_url: String,
+struct ImageMediaUploadResponse {
+    #[serde(rename = "transformUrl")]
+    transform_url: String,
+    token: String,
     #[serde(rename = "r2Key")]
     r2_key: String,
 }
 
-/// Presign, PUT, return the r2Key that should be sent as `image` on the
-/// achievement create/update body. Mirrors the UI flow: fetch presigned URL →
-/// PUT bytes → store r2Key. Allowed extensions are enforced server-side; we
-/// just pass whatever the file has and surface the API error if it's rejected.
 async fn upload_achievement_image(
     api_key: &str,
     game_id: &str,
@@ -73,13 +70,12 @@ async fn upload_achievement_image(
     let client = config::create_http_client()?;
     let api_host = config::get("api_host")?;
 
-    // 1. Get presigned URL
-    let presign_url = format!(
-        "{}/api/games/{}/achievements/image-upload-url",
+    let authorization_url = format!(
+        "{}/api/games/{}/achievements/image-media-upload",
         api_host, game_id
     );
     let resp = client
-        .post(&presign_url)
+        .post(&authorization_url)
         .header("Authorization", format!("Bearer {}", api_key))
         .json(&json!({
             "identifier": identifier,
@@ -88,21 +84,21 @@ async fn upload_achievement_image(
         .send()
         .await?;
     let resp = config::check_api_response(resp).await?;
-    let presigned: ImageUploadUrlResponse = resp.json().await?;
+    let authorization: ImageMediaUploadResponse = resp.json().await?;
 
-    // 2. PUT the bytes directly to R2. UI doesn't set Content-Type either.
-    let put_resp = client
-        .put(&presigned.upload_url)
+    let transform_resp = client
+        .post(&authorization.transform_url)
+        .header("Authorization", format!("Bearer {}", authorization.token))
         .body(bytes)
         .send()
         .await?;
-    if !put_resp.status().is_success() {
-        let status = put_resp.status();
-        let body = put_resp.text().await.unwrap_or_default();
-        anyhow::bail!("Image upload to R2 failed ({}): {}", status, body);
+    if !transform_resp.status().is_success() {
+        let status = transform_resp.status();
+        let body = transform_resp.text().await.unwrap_or_default();
+        anyhow::bail!("Image transform failed ({}): {}", status, body);
     }
 
-    Ok(presigned.r2_key)
+    Ok(authorization.r2_key)
 }
 
 pub struct CreateAchievementArgs<'a> {
@@ -378,6 +374,23 @@ mod tests {
         assert!(achievement.secret);
         assert_eq!(achievement.stat_id, None);
         assert_eq!(achievement.stat_threshold, None);
+    }
+
+    #[test]
+    fn parses_an_image_media_upload_authorization() {
+        let response: ImageMediaUploadResponse = serde_json::from_value(json!({
+            "transformUrl": "https://media.wavedash.com/transform",
+            "token": "signed-token",
+            "r2Key": "org/game/achievements/first-win.webp"
+        }))
+        .expect("the media upload authorization should deserialize");
+
+        assert_eq!(
+            response.transform_url,
+            "https://media.wavedash.com/transform"
+        );
+        assert_eq!(response.token, "signed-token");
+        assert_eq!(response.r2_key, "org/game/achievements/first-win.webp");
     }
 
     #[test]
