@@ -21,9 +21,12 @@ use axum::{
     Router,
 };
 use serde::Deserialize;
+use std::collections::HashMap;
 use tokio::net::TcpListener;
 
 const SDK_JS_VERSION: &str = include_str!("sdk-js-version");
+
+type QueryParams = HashMap<String, String>;
 
 /// Classic parser-blocking IIFE (auto-runs setupWavedashSDK): the only way
 /// `window.Wavedash` exists before game scripts parse — module scripts are
@@ -98,6 +101,13 @@ impl ServeConfig {
     /// to when the URL has no `?sdkconfig=`. Keeps game URLs clean.
     fn sdkconfig_cookie_name(&self) -> String {
         format!("wd_sdkconfig_{}", self.build_uuid)
+    }
+
+    /// The `wvdsh_` launch params of a URL that had to bounce through the
+    /// mainsite for auth, which returns to `/` with the query gone. Written on
+    /// the way out, replayed and expired by the callback.
+    fn pending_params_cookie_name(&self) -> String {
+        format!("wd_pending_{}", self.build_uuid)
     }
 }
 
@@ -236,10 +246,16 @@ async fn handle_callback(
         }
     };
 
+    let pending_name = cfg.pending_params_cookie_name();
+    let location = cookie_value(&headers, &pending_name)
+        .filter(|query| !query.is_empty())
+        .map_or_else(|| "/".to_string(), |query| format!("/?{query}"));
+
     let mut builder = Response::builder()
         .status(StatusCode::SEE_OTHER)
-        .header(header::LOCATION, "/")
+        .header(header::LOCATION, location)
         .header(header::CACHE_CONTROL, "no-store")
+        .header(header::SET_COOKIE, expire_cookie(&pending_name))
         .header(
             header::SET_COOKIE,
             set_cookie(&cfg.session_cookie_name(), &exchange.session_token),
@@ -284,8 +300,8 @@ fn expire_cookie(name: &str) -> String {
     format!("{name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
 }
 
-/// Prefixes of the three cookies each dev build issues, suffixed by its uuid.
-const COOKIE_PREFIXES: [&str; 3] = ["wd_session_", "wd_jwt_", "wd_sdkconfig_"];
+/// Prefixes of the four cookies each dev build issues, suffixed by its uuid.
+const COOKIE_PREFIXES: [&str; 4] = ["wd_session_", "wd_jwt_", "wd_sdkconfig_", "wd_pending_"];
 
 /// Names of prior dev builds' wavedash cookies that are safe to expire: any
 /// `wd_*_<uuid>` cookie the browser is replaying whose build server is no
@@ -299,6 +315,7 @@ fn stale_wavedash_cookies(headers: &HeaderMap, cfg: &ServeConfig) -> Vec<String>
         cfg.session_cookie_name(),
         cfg.jwt_cookie_name(),
         cfg.sdkconfig_cookie_name(),
+        cfg.pending_params_cookie_name(),
     ];
     let Some(raw) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) else {
         return Vec::new();
@@ -489,53 +506,109 @@ fn browser_config(cfg: &ServeConfig, headers: &HeaderMap) -> Option<String> {
     Some(urlencoding::decode(&raw).map_or(raw.clone(), |d| d.into_owned()))
 }
 
+const LAUNCH_PARAM_PREFIX: &str = "wvdsh_";
+
+fn launch_param_name(key: &str) -> Option<&str> {
+    key.strip_prefix(LAUNCH_PARAM_PREFIX)
+        .filter(|name| !name.is_empty())
+}
+
+fn launch_params(query: &QueryParams) -> serde_json::Map<String, serde_json::Value> {
+    query
+        .iter()
+        .filter_map(|(key, value)| {
+            let name = launch_param_name(key)?;
+            Some((name.to_string(), serde_json::Value::String(value.clone())))
+        })
+        .collect()
+}
+
+fn config_with_launch_params(config: &str, query: &QueryParams) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(config) else {
+        return config.to_string();
+    };
+    let Some(object) = value.as_object_mut() else {
+        return config.to_string();
+    };
+    object.insert(
+        "launchParams".to_string(),
+        serde_json::Value::Object(launch_params(query)),
+    );
+    value.to_string()
+}
+
+fn launch_param_query(query: &QueryParams) -> Option<String> {
+    let pairs: Vec<String> = query
+        .iter()
+        .filter(|(key, _)| launch_param_name(key).is_some())
+        .map(|(key, value)| {
+            format!(
+                "{}={}",
+                urlencoding::encode(key),
+                urlencoding::encode(value)
+            )
+        })
+        .collect();
+    (!pairs.is_empty()).then(|| pairs.join("&"))
+}
+
+fn bounce_to_auth(cfg: &ServeConfig, query: &QueryParams) -> Response {
+    let name = cfg.pending_params_cookie_name();
+    let cookie = match launch_param_query(query) {
+        Some(pending) => set_cookie(&name, &pending),
+        None => expire_cookie(&name),
+    };
+    ([(header::SET_COOKIE, cookie)], Redirect::to(&cfg.auth_url)).into_response()
+}
+
 /// Browsers with this server's cookies get the game; anything else re-runs
 /// the handoff — a bare localhost visit works, and a reload heals cleared
 /// cookies or an expired session.
 async fn handle_index(
     State(cfg): State<Arc<ServeConfig>>,
     headers: HeaderMap,
+    Query(query): Query<QueryParams>,
     uri: Uri,
 ) -> Response {
     let Some(config) = browser_config(&cfg, &headers) else {
-        return Redirect::to(&cfg.auth_url).into_response();
+        return bounce_to_auth(&cfg, &query);
     };
 
-    if let Some(engine_entry) = &cfg.engine_entry {
-        let html = shell(
-            cfg.sdk_js.as_deref(),
-            &engine_entry.entrypoint_url,
-            Some(&engine_entry.params_json),
-            &config,
-        );
-        return respond(StatusCode::OK, HTML, None, html);
-    }
-    if cfg.entry.ends_with(".js") {
-        let html = shell(
-            cfg.sdk_js.as_deref(),
-            &format!("/{}", cfg.entry),
-            None,
-            &config,
-        );
-        return respond(StatusCode::OK, HTML, None, html);
-    }
-    // The HTML entry serves at its real path so relative assets resolve.
-    let query = uri.query().map(|q| format!("?{q}")).unwrap_or_default();
-    Redirect::to(&format!("/{}{}", cfg.entry, query)).into_response()
+    let (script_src, params_json) = match &cfg.engine_entry {
+        Some(engine_entry) => (
+            engine_entry.entrypoint_url.clone(),
+            Some(engine_entry.params_json.as_str()),
+        ),
+        None if cfg.entry.ends_with(".js") => (format!("/{}", cfg.entry), None),
+        None => {
+            // The HTML entry serves at its real path so relative assets resolve.
+            let raw_query = uri.query().map(|q| format!("?{q}")).unwrap_or_default();
+            return Redirect::to(&format!("/{}{}", cfg.entry, raw_query)).into_response();
+        }
+    };
+
+    let html = shell(
+        cfg.sdk_js.as_deref(),
+        &script_src,
+        params_json,
+        &config_with_launch_params(&config, &query),
+    );
+    respond(StatusCode::OK, HTML, None, html)
 }
 
 async fn handle_static(
     State(cfg): State<Arc<ServeConfig>>,
     headers: HeaderMap,
+    Query(query): Query<QueryParams>,
     uri: Uri,
 ) -> Response {
     let config = browser_config(&cfg, &headers);
     // An HTML nav without this browser's cookies is stale state (cookies
     // cleared) — re-run the handoff instead of serving a game that will 401.
     if config.is_none() && is_html_path(uri.path()) {
-        return Redirect::to(&cfg.auth_url).into_response();
+        return bounce_to_auth(&cfg, &query);
     }
-    serve_file(&cfg, uri.path(), config.as_deref())
+    serve_file(&cfg, uri.path(), config.as_deref(), &query)
 }
 
 fn is_html_path(path: &str) -> bool {
@@ -566,7 +639,12 @@ async fn handle_sdk_js(State(cfg): State<Arc<ServeConfig>>) -> Response {
 
 /// Authed HTML navigations get the config global + SDK tags injected (prod's
 /// embed.js mechanism); everything else streams as-is.
-fn serve_file(cfg: &ServeConfig, url_path: &str, config: Option<&str>) -> Response {
+fn serve_file(
+    cfg: &ServeConfig,
+    url_path: &str,
+    config: Option<&str>,
+    query: &QueryParams,
+) -> Response {
     let Some(file_path) = resolve_path(&cfg.upload_dir, url_path) else {
         return respond(StatusCode::NOT_FOUND, TEXT, None, "Not Found");
     };
@@ -580,7 +658,7 @@ fn serve_file(cfg: &ServeConfig, url_path: &str, config: Option<&str>) -> Respon
             let injected = inject_sdk(
                 cfg.sdk_js.as_deref(),
                 &String::from_utf8_lossy(&bytes),
-                config,
+                &config_with_launch_params(config, query),
             );
             return respond(StatusCode::OK, HTML, None, injected);
         }
