@@ -821,6 +821,237 @@ mod tests {
         );
     }
 
+    fn query_of(query: &str) -> QueryParams {
+        let uri: Uri = format!("/?{query}").parse().unwrap();
+        Query::<QueryParams>::try_from_uri(&uri).unwrap().0
+    }
+
+    fn params_of(query: &str) -> serde_json::Map<String, serde_json::Value> {
+        launch_params(&query_of(query))
+    }
+
+    const TEST_UUID: &str = "testuuid";
+    const TEST_AUTH_URL: &str = "https://wavedash.com/auth/dev?build_uuid=testuuid";
+
+    fn test_config(dir: &Path, entry: &str) -> ServeConfig {
+        ServeConfig {
+            upload_dir: dir.to_path_buf(),
+            entry: entry.to_string(),
+            verbose: false,
+            build_uuid: TEST_UUID.to_string(),
+            sessions_dir: dir.to_path_buf(),
+            state_token: "state".to_string(),
+            auth_url: TEST_AUTH_URL.to_string(),
+            api_key: "key".to_string(),
+            api_host: "https://api.example".to_string(),
+            client: reqwest::Client::new(),
+            engine_entry: None,
+            sdk_js: None,
+            jwks: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    fn authed_headers() -> HeaderMap {
+        let config = r#"{"gameCloudId":"g1","launchParams":{},"parentOrigin":""}"#;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            format!(
+                "wd_session_{TEST_UUID}=session; wd_sdkconfig_{TEST_UUID}={}",
+                urlencoding::encode(config)
+            )
+            .parse()
+            .unwrap(),
+        );
+        headers
+    }
+
+    async fn body_string(response: Response) -> String {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    /// Inlined as a JS string literal holding the config JSON, so it parses twice.
+    fn served_sdk_config(html: &str) -> serde_json::Value {
+        let marker = "window.__wavedashSdkConfig = ";
+        let start = html.find(marker).expect("config global") + marker.len();
+        let literal: String = serde_json::Deserializer::from_str(&html[start..])
+            .into_iter::<String>()
+            .next()
+            .expect("js string literal")
+            .expect("js string literal");
+        serde_json::from_str(&literal).expect("config json")
+    }
+
+    #[tokio::test]
+    async fn a_js_entry_shell_carries_the_launch_params_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Arc::new(test_config(dir.path(), "game.js"));
+
+        let response = handle_index(
+            State(cfg),
+            authed_headers(),
+            Query(query_of("wvdsh_lobby=abc123")),
+            "/?wvdsh_lobby=abc123".parse::<Uri>().unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let config = served_sdk_config(&body_string(response).await);
+        assert_eq!(
+            config["launchParams"],
+            serde_json::json!({ "lobby": "abc123" })
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unauthed_visit_without_launch_params_clears_any_stale_stash() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Arc::new(test_config(dir.path(), "index.html"));
+
+        let response = handle_index(
+            State(cfg),
+            HeaderMap::new(),
+            Query(QueryParams::new()),
+            "/".parse::<Uri>().unwrap(),
+        )
+        .await;
+        let cookie = response.headers()[header::SET_COOKIE].to_str().unwrap();
+        assert!(cookie.contains("Max-Age=0"), "{cookie}");
+    }
+
+    async fn serve_in_background(dir: &Path, entry: &str) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let cfg = test_config(dir, entry);
+        let handle = tokio::spawn(async move {
+            let _ = run(listener, cfg).await;
+        });
+        (base, handle)
+    }
+
+    #[tokio::test]
+    async fn a_lobby_invite_link_opened_against_the_real_server_reaches_the_game() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<html><head></head></html>").unwrap();
+        let (base, server) = serve_in_background(dir.path(), "index.html").await;
+
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let cookies = authed_headers()[header::COOKIE].to_str().unwrap().to_string();
+
+        let bounce = client
+            .get(format!("{base}/?wvdsh_lobby=abc123"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(bounce.status(), StatusCode::SEE_OTHER);
+        assert_eq!(bounce.headers()[header::LOCATION], TEST_AUTH_URL);
+        let stashed = bounce.headers()[header::SET_COOKIE].to_str().unwrap();
+        assert_eq!(
+            stashed.split(';').next().unwrap(),
+            format!("wd_pending_{TEST_UUID}=wvdsh_lobby=abc123"),
+            "the invite link's lobby must be stashed across the auth bounce"
+        );
+
+        let redirect = client
+            .get(format!("{base}/?wvdsh_lobby=abc123"))
+            .header(header::COOKIE, &cookies)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            redirect.headers()[header::LOCATION],
+            "/index.html?wvdsh_lobby=abc123"
+        );
+
+        let page = client
+            .get(format!("{base}/index.html?wvdsh_lobby=abc123"))
+            .header(header::COOKIE, &cookies)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(page.status(), StatusCode::OK);
+        let config = served_sdk_config(&page.text().await.unwrap());
+        assert_eq!(
+            config["launchParams"],
+            serde_json::json!({ "lobby": "abc123" })
+        );
+
+        server.abort();
+    }
+
+    #[test]
+    fn only_wvdsh_prefixed_query_params_reach_the_game_and_lose_the_prefix() {
+        let params = params_of("wvdsh_lobby=abc123&utm_source=discord&mode=ranked");
+        assert_eq!(params.len(), 1, "{params:?}");
+        assert_eq!(params["lobby"], serde_json::json!("abc123"));
+    }
+
+    #[test]
+    fn a_bare_prefix_is_not_an_empty_named_launch_param() {
+        assert!(params_of("wvdsh_=abc").is_empty());
+    }
+
+    #[test]
+    fn launch_param_values_are_url_decoded_the_way_a_browser_reads_them() {
+        let params = params_of("wvdsh_note=hello+world%21&wvdsh_empty");
+        assert_eq!(params["note"], serde_json::json!("hello world!"));
+        assert_eq!(params["empty"], serde_json::json!(""));
+    }
+
+    #[test]
+    fn the_served_config_carries_the_requests_launch_params() {
+        let config = r#"{"gameCloudId":"g1","launchParams":{}}"#;
+        let merged = config_with_launch_params(config, &query_of("wvdsh_lobby=abc123"));
+        let value: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(value["launchParams"], serde_json::json!({"lobby": "abc123"}));
+        assert_eq!(value["gameCloudId"], serde_json::json!("g1"));
+    }
+
+    #[test]
+    fn a_request_without_launch_params_clears_the_ones_the_config_arrived_with() {
+        let config = r#"{"launchParams":{"lobby":"stale"}}"#;
+        let merged = config_with_launch_params(config, &QueryParams::new());
+        let value: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(value["launchParams"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn an_unparseable_config_is_served_through_untouched() {
+        let config = "not json";
+        assert_eq!(
+            config_with_launch_params(config, &query_of("wvdsh_lobby=abc")),
+            config
+        );
+    }
+
+    #[test]
+    fn only_launch_params_are_stashed_across_the_auth_bounce() {
+        assert_eq!(
+            launch_param_query(&query_of("utm=x&wvdsh_lobby=abc123&z=1")).as_deref(),
+            Some("wvdsh_lobby=abc123")
+        );
+        assert_eq!(launch_param_query(&query_of("utm=x")), None);
+        assert_eq!(launch_param_query(&QueryParams::new()), None);
+            }
+
+    #[test]
+    fn the_stashed_query_still_parses_as_launch_params_after_the_round_trip() {
+        let stashed =
+            launch_param_query(&query_of("wvdsh_note=hello+world%3Bmore%26done&utm=x")).unwrap();
+        // The stash rides in a cookie, so no pair may carry a bare ; & or space.
+        assert!(!stashed.contains(';') && !stashed.contains(' '), "{stashed}");
+        assert_eq!(stashed.matches('&').count(), 0, "{stashed}");
+
+        let params = launch_params(&query_of(&stashed));
+        assert_eq!(params["note"], serde_json::json!("hello world;more&done"));
+    }
+
     #[test]
     fn a_local_bundle_is_served_from_this_origin() {
         let url = inject_url(Some(Path::new("/tmp/sdk-js/dist/inject.global.js")));
