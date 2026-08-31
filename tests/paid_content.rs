@@ -23,6 +23,7 @@ fn run(args: &[&str]) -> Output {
         .env_remove("WAVEDASH_GAME_ID")
         .env_remove("WAVEDASH_UPLOAD_DIR")
         .env_remove("CI")
+        .env("HOME", env!("CARGO_TARGET_TMPDIR"))
         .output()
         .expect("the wavedash binary should run")
 }
@@ -362,6 +363,7 @@ fn deactivate_refuses_to_guess_when_it_cannot_prompt() {
             "pc_1",
         ])
         .env_remove("WAVEDASH_GAME_ID")
+        .env("WAVEDASH_TOKEN", "not-a-real-key")
         .env("CI", "1")
         .output()
         .expect("the wavedash binary should run");
