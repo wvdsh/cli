@@ -6,7 +6,8 @@ use colored::Colorize;
 use comfy_table::modifiers::UTF8_ROUND_CORNERS;
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, ContentArrangement, Table};
-use serde::{Deserialize, Serialize};
+use reqwest::{Method, RequestBuilder};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::json;
 
 const FILE_LISTING_LIMIT: usize = 50;
@@ -26,6 +27,23 @@ impl Visibility {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileListing {
+    Hidden,
+    Capped,
+    Full,
+}
+
+impl FileListing {
+    pub fn from_flags(show_files: bool, no_limit: bool) -> Self {
+        match (show_files, no_limit) {
+            (_, true) => FileListing::Full,
+            (true, false) => FileListing::Capped,
+            (false, false) => FileListing::Hidden,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum PaidContentRef<'a> {
     Id(&'a str),
@@ -35,9 +53,9 @@ pub enum PaidContentRef<'a> {
 impl PaidContentRef<'_> {
     fn path_segment(&self) -> String {
         match self {
-            PaidContentRef::Id(id) => (*id).to_string(),
+            PaidContentRef::Id(id) => format!("/{}", id),
             PaidContentRef::ContentIdentifier(identifier) => {
-                format!("by-identifier/{}", identifier)
+                format!("/by-identifier/{}", urlencoding::encode(identifier))
             }
         }
     }
@@ -48,6 +66,18 @@ impl PaidContentRef<'_> {
             PaidContentRef::ContentIdentifier(identifier) => identifier,
         }
     }
+}
+
+fn request(api_key: &str, method: Method, game_id: &str, path: &str) -> Result<RequestBuilder> {
+    let url = format!(
+        "{}/api/games/{}/paid-content{}",
+        config::get("api_host")?,
+        game_id,
+        path
+    );
+    Ok(config::create_http_client()?
+        .request(method, url)
+        .header("Authorization", format!("Bearer {}", api_key)))
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -61,6 +91,12 @@ struct PaidContent {
     #[serde(rename = "priceCents")]
     price_cents: i64,
     title: String,
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    features: Vec<String>,
+    #[serde(default, rename = "buttonLabel")]
+    button_label: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,23 +142,29 @@ struct MatchReport {
     matched: Vec<MatchedFile>,
 }
 
+/// Swallows a malformed report so it cannot fail a write that already landed.
+fn report_or_none<'de, D: Deserializer<'de>>(d: D) -> Result<Option<MatchReport>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).ok())
+}
+
 #[derive(Debug, Deserialize)]
 struct CreatedPaidContent {
     _id: String,
     #[serde(rename = "contentIdentifier")]
     content_identifier: String,
-    #[serde(rename = "matchReport")]
+    #[serde(rename = "matchReport", default, deserialize_with = "report_or_none")]
     match_report: Option<MatchReport>,
 }
 
 #[derive(Debug, Deserialize)]
 struct UpdatedPaidContent {
-    #[serde(rename = "matchReport")]
+    #[serde(rename = "matchReport", default, deserialize_with = "report_or_none")]
     match_report: Option<MatchReport>,
 }
 
-/// Validates shape, not the platform's price range: a bound compiled in here
-/// would reject prices the server accepts as soon as its limits move.
+/// Shape only: a range compiled in here would reject prices the server accepts
+/// as soon as its limits move.
 pub fn parse_price_dollars(input: &str) -> Result<i64, String> {
     let raw = input.trim().trim_start_matches('$').trim();
     let invalid = || {
@@ -167,7 +209,7 @@ fn files_noun(count: u64) -> &'static str {
     }
 }
 
-fn render_report(report: &MatchReport, show_files: bool, no_limit: bool) -> String {
+fn render_report(report: &MatchReport, listing: FileListing) -> String {
     let mut out = String::new();
 
     let Some(build) = &report.build else {
@@ -180,9 +222,10 @@ fn render_report(report: &MatchReport, show_files: bool, no_limit: bool) -> Stri
         None => "latest build".to_string(),
     };
     out.push_str(&format!(
-        "\n  {} ({} files indexed{})\n\n",
+        "\n  {} ({} {} indexed{})\n\n",
         build_label.bold(),
         report.total_files,
+        files_noun(report.total_files),
         if report.truncated {
             "; indexing limit reached, counts are a floor"
         } else {
@@ -218,18 +261,17 @@ fn render_report(report: &MatchReport, show_files: bool, no_limit: bool) -> Stri
             "{} of {} {} gated",
             report.gated_files,
             report.total_files,
-            files_noun(report.gated_files)
+            files_noun(report.total_files)
         )
         .bold(),
         format_bytes(report.gated_size_bytes)
     ));
 
-    if (show_files || no_limit) && !report.matched.is_empty() {
+    if listing != FileListing::Hidden && !report.matched.is_empty() {
         out.push('\n');
-        let limit = if no_limit {
-            report.matched.len()
-        } else {
-            FILE_LISTING_LIMIT.min(report.matched.len())
+        let limit = match listing {
+            FileListing::Full => report.matched.len(),
+            _ => FILE_LISTING_LIMIT.min(report.matched.len()),
         };
         let listed = &report.matched[..limit];
         let path_width = listed
@@ -261,23 +303,15 @@ fn render_report(report: &MatchReport, show_files: bool, no_limit: bool) -> Stri
     out
 }
 
-fn print_report(report: Option<&MatchReport>, show_files: bool, no_limit: bool) {
+fn print_report(report: Option<&MatchReport>, listing: FileListing) {
     if let Some(report) = report {
-        print!("{}", render_report(report, show_files, no_limit));
+        print!("{}", render_report(report, listing));
     }
 }
 
 pub async fn handle_paid_content_list(game_id: &str, json_output: bool) -> Result<()> {
     let api_key = require_api_key()?;
-    let client = config::create_http_client()?;
-    let api_host = config::get("api_host")?;
-    let url = format!("{}/api/games/{}/paid-content", api_host, game_id);
-
-    let resp = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await?;
+    let resp = request(&api_key, Method::GET, game_id, "")?.send().await?;
 
     let resp = config::check_api_response(resp).await?;
     let data: PaidContentListResponse = resp.json().await?;
@@ -331,16 +365,11 @@ pub struct CreatePaidContentArgs<'a> {
     pub features: &'a [String],
     pub button_label: &'a str,
     pub visibility: Visibility,
-    pub show_files: bool,
-    pub show_files_no_limit: bool,
+    pub listing: FileListing,
 }
 
 pub async fn handle_paid_content_create(args: CreatePaidContentArgs<'_>) -> Result<()> {
     let api_key = require_api_key()?;
-    let client = config::create_http_client()?;
-    let api_host = config::get("api_host")?;
-    let url = format!("{}/api/games/{}/paid-content", api_host, args.game_id);
-
     let body = json!({
         "contentIdentifier": args.content_identifier,
         "pathPatterns": args.patterns,
@@ -352,9 +381,7 @@ pub async fn handle_paid_content_create(args: CreatePaidContentArgs<'_>) -> Resu
         "visibility": args.visibility.as_wire(),
     });
 
-    let resp = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
+    let resp = request(&api_key, Method::POST, args.game_id, "")?
         .json(&body)
         .send()
         .await?;
@@ -366,11 +393,7 @@ pub async fn handle_paid_content_create(args: CreatePaidContentArgs<'_>) -> Resu
         "✓ Created paid content \"{}\" (id: {})",
         created.content_identifier, created._id
     );
-    print_report(
-        created.match_report.as_ref(),
-        args.show_files,
-        args.show_files_no_limit,
-    );
+    print_report(created.match_report.as_ref(), args.listing);
     Ok(())
 }
 
@@ -384,20 +407,11 @@ pub struct UpdatePaidContentArgs<'a> {
     pub features: Option<&'a [String]>,
     pub button_label: Option<&'a str>,
     pub visibility: Option<Visibility>,
-    pub show_files: bool,
-    pub show_files_no_limit: bool,
+    pub listing: FileListing,
 }
 
 pub async fn handle_paid_content_update(args: UpdatePaidContentArgs<'_>) -> Result<()> {
     let api_key = require_api_key()?;
-    let client = config::create_http_client()?;
-    let api_host = config::get("api_host")?;
-    let url = format!(
-        "{}/api/games/{}/paid-content/{}",
-        api_host,
-        args.game_id,
-        args.reference.path_segment()
-    );
 
     let mut body = serde_json::Map::new();
     if let Some(patterns) = args.patterns {
@@ -426,22 +440,21 @@ pub async fn handle_paid_content_update(args: UpdatePaidContentArgs<'_>) -> Resu
         anyhow::bail!("No fields provided to update.");
     }
 
-    let resp = client
-        .patch(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .json(&serde_json::Value::Object(body))
-        .send()
-        .await?;
+    let resp = request(
+        &api_key,
+        Method::PATCH,
+        args.game_id,
+        &args.reference.path_segment(),
+    )?
+    .json(&serde_json::Value::Object(body))
+    .send()
+    .await?;
 
     let resp = config::check_api_response(resp).await?;
     let updated: UpdatedPaidContent = resp.json().await?;
 
     println!("✓ Updated paid content {}", args.reference.value());
-    print_report(
-        updated.match_report.as_ref(),
-        args.show_files,
-        args.show_files_no_limit,
-    );
+    print_report(updated.match_report.as_ref(), args.listing);
     Ok(())
 }
 
@@ -475,18 +488,7 @@ pub async fn handle_paid_content_deactivate(
         }
     }
 
-    let client = config::create_http_client()?;
-    let api_host = config::get("api_host")?;
-    let url = format!(
-        "{}/api/games/{}/paid-content/{}",
-        api_host,
-        game_id,
-        reference.path_segment()
-    );
-
-    let resp = client
-        .delete(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
+    let resp = request(&api_key, Method::DELETE, game_id, &reference.path_segment())?
         .send()
         .await?;
 
@@ -499,21 +501,13 @@ pub struct ResolvePaidContentArgs<'a> {
     pub game_id: &'a str,
     pub patterns: &'a [String],
     pub reference: Option<PaidContentRef<'a>>,
-    pub show_files: bool,
-    pub show_files_no_limit: bool,
+    pub listing: FileListing,
     pub json_output: bool,
     pub strict: bool,
 }
 
 pub async fn handle_paid_content_resolve(args: ResolvePaidContentArgs<'_>) -> Result<()> {
     let api_key = require_api_key()?;
-    let client = config::create_http_client()?;
-    let api_host = config::get("api_host")?;
-    let url = format!(
-        "{}/api/games/{}/paid-content/match-preview",
-        api_host, args.game_id
-    );
-
     let body = match args.reference {
         Some(PaidContentRef::Id(id)) => json!({ "paidContentId": id }),
         Some(PaidContentRef::ContentIdentifier(identifier)) => {
@@ -522,9 +516,7 @@ pub async fn handle_paid_content_resolve(args: ResolvePaidContentArgs<'_>) -> Re
         None => json!({ "pathPatterns": args.patterns }),
     };
 
-    let resp = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
+    let resp = request(&api_key, Method::POST, args.game_id, "/match-preview")?
         .json(&body)
         .send()
         .await?;
@@ -535,10 +527,7 @@ pub async fn handle_paid_content_resolve(args: ResolvePaidContentArgs<'_>) -> Re
     if args.json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        print!(
-            "{}",
-            render_report(&report, args.show_files, args.show_files_no_limit)
-        );
+        print!("{}", render_report(&report, args.listing));
     }
 
     if args.strict && !report.zero_match_patterns.is_empty() {
@@ -627,18 +616,26 @@ mod tests {
     }
 
     #[test]
-    fn a_content_identifier_is_addressed_through_the_by_identifier_path() {
-        assert_eq!(PaidContentRef::Id("pc_1").path_segment(), "pc_1");
+    fn a_reference_owns_its_path_segment_and_escapes_the_identifier() {
+        assert_eq!(PaidContentRef::Id("pc_1").path_segment(), "/pc_1");
         assert_eq!(
             PaidContentRef::ContentIdentifier("full-version").path_segment(),
-            "by-identifier/full-version"
+            "/by-identifier/full-version"
+        );
+        assert_eq!(
+            PaidContentRef::ContentIdentifier("dlc/level-2").path_segment(),
+            "/by-identifier/dlc%2Flevel-2"
+        );
+        assert_eq!(
+            PaidContentRef::ContentIdentifier("../clouds").path_segment(),
+            "/by-identifier/..%2Fclouds"
         );
     }
 
     #[test]
     fn report_echoes_every_pattern_verbatim_even_without_the_listing() {
         let report = report_with(4, vec![("levels/bonus/**", 4)]);
-        let rendered = render_report(&report, false, false);
+        let rendered = render_report(&report, FileListing::Hidden);
         assert!(
             rendered.contains("\"levels/bonus/**\""),
             "the pattern must be echoed back so shell expansion is visible: {rendered}"
@@ -650,14 +647,14 @@ mod tests {
     #[test]
     fn report_flags_a_pattern_that_matches_nothing() {
         let report = report_with(0, vec![("art/cutscenes/*.webm", 0)]);
-        let rendered = render_report(&report, false, false);
+        let rendered = render_report(&report, FileListing::Hidden);
         assert!(rendered.contains("matches nothing"), "{rendered}");
     }
 
     #[test]
     fn file_listing_truncates_and_says_how_many_it_omitted() {
         let report = report_with(60, vec![("levels/**", 60)]);
-        let rendered = render_report(&report, true, false);
+        let rendered = render_report(&report, FileListing::Capped);
         assert!(rendered.contains("levels/bonus/file0.dat"));
         assert!(!rendered.contains("levels/bonus/file59.dat"));
         assert!(
@@ -668,28 +665,26 @@ mod tests {
     }
 
     #[test]
-    fn no_limit_lists_every_matched_path() {
+    fn a_full_listing_names_every_matched_path() {
         let report = report_with(60, vec![("levels/**", 60)]);
-        let rendered = render_report(&report, true, true);
+        let rendered = render_report(&report, FileListing::Full);
         assert!(rendered.contains("levels/bonus/file59.dat"));
         assert!(!rendered.contains("… and"));
     }
 
     #[test]
-    fn no_limit_alone_still_lists_the_paths() {
-        let report = report_with(60, vec![("levels/**", 60)]);
-        let rendered = render_report(&report, false, true);
-        assert!(
-            rendered.contains("levels/bonus/file59.dat"),
-            "--show-files-no-limit implies --show-files: {rendered}"
-        );
+    fn no_limit_implies_a_listing_whatever_show_files_said() {
+        assert_eq!(FileListing::from_flags(false, false), FileListing::Hidden);
+        assert_eq!(FileListing::from_flags(true, false), FileListing::Capped);
+        assert_eq!(FileListing::from_flags(true, true), FileListing::Full);
+        assert_eq!(FileListing::from_flags(false, true), FileListing::Full);
     }
 
     #[test]
     fn report_handles_a_game_with_no_completed_build() {
         let mut report = report_with(0, vec![("levels/**", 0)]);
         report.build = None;
-        let rendered = render_report(&report, true, false);
+        let rendered = render_report(&report, FileListing::Capped);
         assert!(rendered.contains("No completed build yet"), "{rendered}");
     }
 
@@ -697,7 +692,7 @@ mod tests {
     fn truncated_index_is_reported_rather_than_hidden() {
         let mut report = report_with(4, vec![("levels/**", 4)]);
         report.truncated = true;
-        let rendered = render_report(&report, false, false);
+        let rendered = render_report(&report, FileListing::Hidden);
         assert!(rendered.contains("counts are a floor"), "{rendered}");
     }
 
@@ -722,6 +717,28 @@ mod tests {
     }
 
     #[test]
+    fn a_report_that_will_not_parse_does_not_fail_a_create_that_landed() {
+        let created: CreatedPaidContent = serde_json::from_value(json!({
+            "_id": "paid-content-id",
+            "contentIdentifier": "full-version",
+            "matchReport": { "totalFiles": 13 }
+        }))
+        .expect("a trimmed report must not fail the response");
+
+        assert_eq!(created.content_identifier, "full-version");
+        assert!(created.match_report.is_none());
+    }
+
+    #[test]
+    fn the_summary_pluralises_on_the_total_it_follows() {
+        let mut report = report_with(1, vec![("levels/boss.dat", 1)]);
+        report.total_files = 1;
+        let rendered = render_report(&report, FileListing::Hidden);
+        assert!(rendered.contains("1 file indexed"), "{rendered}");
+        assert!(rendered.contains("1 of 1 file gated"), "{rendered}");
+    }
+
+    #[test]
     fn parses_a_create_response_whose_report_is_absent() {
         let created: CreatedPaidContent = serde_json::from_value(json!({
             "_id": "paid-content-id",
@@ -743,6 +760,9 @@ mod tests {
             visibility: "playtest".to_string(),
             price_cents: 499,
             title: "Unlock all content".to_string(),
+            message: "The Ski Force is counting on you.".to_string(),
+            features: vec!["All twelve alpine peaks".to_string()],
+            button_label: "Unlock".to_string(),
         };
 
         let json = serde_json::to_value(&entry).expect("the row should serialize");
@@ -752,6 +772,8 @@ mod tests {
         assert_eq!(json["priceCents"], 499);
         assert_eq!(json["visibility"], "playtest");
         assert_eq!(json["title"], "Unlock all content");
+        assert_eq!(json["features"][0], "All twelve alpine peaks");
+        assert_eq!(json["buttonLabel"], "Unlock");
 
         let mut keys: Vec<&str> = json
             .as_object()
@@ -764,12 +786,16 @@ mod tests {
             keys,
             vec![
                 "_id",
+                "buttonLabel",
                 "contentIdentifier",
+                "features",
+                "message",
                 "pathPatterns",
                 "priceCents",
                 "title",
                 "visibility"
-            ]
+            ],
+            "update replaces features wholesale, so --json has to carry them"
         );
     }
 }

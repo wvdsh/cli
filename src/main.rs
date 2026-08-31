@@ -546,6 +546,7 @@ enum PaidContentCommands {
         config: PathBuf,
         #[arg(
             value_name = "CONTENT_IDENTIFIER",
+            value_parser = parse_non_empty_arg,
             help = "Identifier your game passes to isEntitled (e.g. full-version)"
         )]
         content_identifier: String,
@@ -628,6 +629,7 @@ enum PaidContentCommands {
         config: PathBuf,
         #[arg(
             value_name = "CONTENT_IDENTIFIER",
+            value_parser = parse_non_empty_arg,
             conflicts_with = "id",
             required_unless_present = "id",
             help = "Identifier chosen at create time (e.g. full-version)"
@@ -637,6 +639,7 @@ enum PaidContentCommands {
             long,
             conflicts_with = "content_identifier",
             required_unless_present = "content_identifier",
+            value_parser = parse_non_empty_arg,
             help = "Address the entry by its document ID instead"
         )]
         id: Option<String>,
@@ -716,6 +719,7 @@ enum PaidContentCommands {
         config: PathBuf,
         #[arg(
             value_name = "CONTENT_IDENTIFIER",
+            value_parser = parse_non_empty_arg,
             conflicts_with = "id",
             required_unless_present = "id",
             help = "Identifier chosen at create time (e.g. full-version)"
@@ -725,6 +729,7 @@ enum PaidContentCommands {
             long,
             conflicts_with = "content_identifier",
             required_unless_present = "content_identifier",
+            value_parser = parse_non_empty_arg,
             help = "Address the entry by its document ID instead"
         )]
         id: Option<String>,
@@ -759,11 +764,13 @@ enum PaidContentCommands {
         config: PathBuf,
         #[arg(
             value_name = "CONTENT_IDENTIFIER",
+            value_parser = parse_non_empty_arg,
             help = "Resolve the patterns stored on this entry"
         )]
         content_identifier: Option<String>,
         #[arg(
             long,
+            value_parser = parse_non_empty_arg,
             help = "Resolve the patterns stored on this entry, by document ID"
         )]
         id: Option<String>,
@@ -1165,8 +1172,7 @@ async fn run() -> Result<()> {
                     features: &feature,
                     button_label: &button_label,
                     visibility,
-                    show_files,
-                    show_files_no_limit,
+                    listing: paid_content::FileListing::from_flags(show_files, show_files_no_limit),
                 })
                 .await?;
             }
@@ -1197,8 +1203,7 @@ async fn run() -> Result<()> {
                     features: passed(&feature),
                     button_label: button_label.as_deref(),
                     visibility,
-                    show_files,
-                    show_files_no_limit,
+                    listing: paid_content::FileListing::from_flags(show_files, show_files_no_limit),
                 })
                 .await?;
             }
@@ -1230,8 +1235,7 @@ async fn run() -> Result<()> {
                     game_id: &game_id,
                     patterns: &pattern,
                     reference: paid_content_ref(id.as_deref(), content_identifier.as_deref()),
-                    show_files,
-                    show_files_no_limit,
+                    listing: paid_content::FileListing::from_flags(show_files, show_files_no_limit),
                     json_output: json,
                     strict,
                 })
