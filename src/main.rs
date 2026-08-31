@@ -7,6 +7,7 @@ mod config;
 mod dev;
 mod file_staging;
 mod init;
+mod paid_content;
 mod publish;
 mod stats;
 mod updater;
@@ -26,6 +27,11 @@ use config::{resolve_game_id, UploadSource};
 use dev::handle_dev;
 use init::{
     handle_init, handle_project_create, handle_project_list, handle_team_create, handle_team_list,
+};
+use paid_content::{
+    handle_paid_content_create, handle_paid_content_deactivate, handle_paid_content_list,
+    handle_paid_content_resolve, handle_paid_content_update, CreatePaidContentArgs,
+    ResolvePaidContentArgs, UpdatePaidContentArgs, Visibility,
 };
 use publish::{handle_publish, PublishArgs};
 use stats::{handle_stat_create, handle_stat_delete, handle_stat_update};
@@ -154,6 +160,15 @@ enum Commands {
     Achievement {
         #[command(subcommand)]
         action: AchievementCommands,
+    },
+    #[command(
+        name = "paid-content",
+        visible_alias = "unlockable",
+        about = "Manage in-build paywalls (unlockable content) for a game"
+    )]
+    PaidContent {
+        #[command(subcommand)]
+        action: PaidContentCommands,
     },
     #[command(
         name = "clear-playtest-data",
@@ -490,6 +505,309 @@ enum AchievementCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum PaidContentCommands {
+    #[command(visible_alias = "ls", about = "List paid content for a game")]
+    List {
+        #[arg(
+            long = "game-id",
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
+    },
+    #[command(
+        visible_alias = "add",
+        about = "Create a paywall over build files",
+        override_usage = "wavedash paid-content create <CONTENT_IDENTIFIER> [OPTIONS]"
+    )]
+    Create {
+        #[arg(
+            long = "game-id",
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(
+            value_name = "CONTENT_IDENTIFIER",
+            help = "Identifier your game passes to isEntitled (e.g. full-version)"
+        )]
+        content_identifier: String,
+        #[arg(
+            long = "pattern",
+            visible_alias = "glob",
+            help = "Glob for a build file to lock; pass multiple times. QUOTE IT — an unquoted glob is expanded by your shell",
+            action = clap::ArgAction::Append,
+            num_args = 1,
+            required = true
+        )]
+        pattern: Vec<String>,
+        #[arg(
+            long,
+            value_name = "USD",
+            value_parser = paid_content::parse_price_dollars,
+            help = "Price in USD, e.g. 4.99"
+        )]
+        price: i64,
+        #[arg(long, help = "Paywall modal headline")]
+        title: String,
+        #[arg(
+            long = "feature",
+            visible_alias = "feat",
+            help = "Feature bullet; pass multiple times",
+            action = clap::ArgAction::Append,
+            num_args = 1,
+            required = true
+        )]
+        feature: Vec<String>,
+        #[arg(long, visible_alias = "msg", help = "Paywall modal body copy")]
+        message: Option<String>,
+        #[arg(
+            long = "button-label",
+            visible_alias = "btn",
+            help = "Purchase button label",
+            default_value = "Unlock"
+        )]
+        button_label: String,
+        #[arg(
+            long,
+            visible_aliases = ["visible", "vis"],
+            value_enum,
+            default_value = "playtest",
+            help = "Where the content is offered (inactive is set via `deactivate`)"
+        )]
+        visibility: Visibility,
+        #[arg(
+            long = "show-files",
+            visible_alias = "show",
+            help = "List the matched file paths",
+            help_heading = "Match report"
+        )]
+        show_files: bool,
+        #[arg(
+            long = "show-files-no-limit",
+            visible_alias = "show-all",
+            help = "List every matched path instead of the first 50",
+            help_heading = "Match report"
+        )]
+        show_files_no_limit: bool,
+    },
+    #[command(
+        about = "Update paid content; only the fields you pass change",
+        override_usage = "wavedash paid-content update <CONTENT_IDENTIFIER> [OPTIONS]"
+    )]
+    Update {
+        #[arg(
+            long = "game-id",
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(
+            value_name = "CONTENT_IDENTIFIER",
+            conflicts_with = "id",
+            required_unless_present = "id",
+            help = "Identifier chosen at create time (e.g. full-version)"
+        )]
+        content_identifier: Option<String>,
+        #[arg(
+            long,
+            conflicts_with = "content_identifier",
+            required_unless_present = "content_identifier",
+            help = "Address the entry by its document ID instead"
+        )]
+        id: Option<String>,
+        #[arg(
+            long = "pattern",
+            visible_alias = "glob",
+            help = "Replaces the entire pattern list; pass multiple times. QUOTE IT",
+            action = clap::ArgAction::Append,
+            num_args = 1
+        )]
+        pattern: Vec<String>,
+        #[arg(
+            long,
+            value_name = "USD",
+            value_parser = paid_content::parse_price_dollars,
+            help = "New price in USD"
+        )]
+        price: Option<i64>,
+        #[arg(long, help = "New modal headline")]
+        title: Option<String>,
+        #[arg(
+            long = "feature",
+            visible_alias = "feat",
+            help = "Replaces the entire feature list; pass multiple times",
+            action = clap::ArgAction::Append,
+            num_args = 1
+        )]
+        feature: Vec<String>,
+        #[arg(long, visible_alias = "msg", help = "New modal body copy")]
+        message: Option<String>,
+        #[arg(
+            long = "button-label",
+            visible_alias = "btn",
+            help = "New purchase button label"
+        )]
+        button_label: Option<String>,
+        #[arg(
+            long,
+            visible_aliases = ["visible", "vis"],
+            value_enum,
+            help = "Where the content is offered"
+        )]
+        visibility: Option<Visibility>,
+        #[arg(
+            long = "show-files",
+            visible_alias = "show",
+            help = "List the matched file paths",
+            help_heading = "Match report"
+        )]
+        show_files: bool,
+        #[arg(
+            long = "show-files-no-limit",
+            visible_alias = "show-all",
+            help = "List every matched path instead of the first 50",
+            help_heading = "Match report"
+        )]
+        show_files_no_limit: bool,
+    },
+    #[command(
+        visible_aliases = ["delete", "del"],
+        about = "Stop offering paid content; buyers keep access",
+        override_usage = "wavedash paid-content deactivate <CONTENT_IDENTIFIER> [OPTIONS]"
+    )]
+    Deactivate {
+        #[arg(
+            long = "game-id",
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(
+            value_name = "CONTENT_IDENTIFIER",
+            conflicts_with = "id",
+            required_unless_present = "id",
+            help = "Identifier chosen at create time (e.g. full-version)"
+        )]
+        content_identifier: Option<String>,
+        #[arg(
+            long,
+            conflicts_with = "content_identifier",
+            required_unless_present = "content_identifier",
+            help = "Address the entry by its document ID instead"
+        )]
+        id: Option<String>,
+        #[arg(
+            long = "yes",
+            short = 'y',
+            visible_alias = "force",
+            help = "Skip confirmation (required when non-interactive)"
+        )]
+        yes: bool,
+    },
+    #[command(
+        about = "Show which build files a paywall's patterns would gate",
+        override_usage = "wavedash paid-content resolve <CONTENT_IDENTIFIER> [OPTIONS]",
+        group = clap::ArgGroup::new("resolve_target")
+            .required(true)
+            .args(["content_identifier", "id", "pattern"])
+    )]
+    Resolve {
+        #[arg(
+            long = "game-id",
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(
+            value_name = "CONTENT_IDENTIFIER",
+            help = "Resolve the patterns stored on this entry"
+        )]
+        content_identifier: Option<String>,
+        #[arg(
+            long,
+            help = "Resolve the patterns stored on this entry, by document ID"
+        )]
+        id: Option<String>,
+        #[arg(
+            long = "pattern",
+            visible_alias = "glob",
+            help = "Resolve an ad-hoc glob instead; pass multiple times. QUOTE IT — an unquoted glob is expanded by your shell",
+            action = clap::ArgAction::Append,
+            num_args = 1
+        )]
+        pattern: Vec<String>,
+        #[arg(
+            long = "show-files",
+            visible_alias = "show",
+            help = "List the matched file paths",
+            help_heading = "Match report"
+        )]
+        show_files: bool,
+        #[arg(
+            long = "show-files-no-limit",
+            visible_alias = "show-all",
+            help = "List every matched path instead of the first 50",
+            help_heading = "Match report"
+        )]
+        show_files_no_limit: bool,
+        #[arg(long, help = "Output the full report as JSON")]
+        json: bool,
+        #[arg(long, help = "Exit non-zero if any pattern matches no files")]
+        strict: bool,
+    },
+}
+
+fn paid_content_ref<'a>(
+    id: Option<&'a str>,
+    content_identifier: Option<&'a str>,
+) -> Option<paid_content::PaidContentRef<'a>> {
+    id.map(paid_content::PaidContentRef::Id)
+        .or_else(|| content_identifier.map(paid_content::PaidContentRef::ContentIdentifier))
+}
+
+fn passed(values: &[String]) -> Option<&[String]> {
+    (!values.is_empty()).then_some(values)
+}
+
 fn env_flag_enabled(name: &str) -> bool {
     std::env::var(name)
         .map(|value| {
@@ -813,6 +1131,113 @@ async fn run() -> Result<()> {
                 }
             }
         }
+        Commands::PaidContent { action } => match action {
+            PaidContentCommands::List {
+                game_id,
+                config,
+                json,
+            } => {
+                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                handle_paid_content_list(&game_id, json).await?;
+            }
+            PaidContentCommands::Create {
+                game_id,
+                config,
+                content_identifier,
+                pattern,
+                price,
+                title,
+                feature,
+                message,
+                button_label,
+                visibility,
+                show_files,
+                show_files_no_limit,
+            } => {
+                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                handle_paid_content_create(CreatePaidContentArgs {
+                    game_id: &game_id,
+                    content_identifier: &content_identifier,
+                    patterns: &pattern,
+                    price_cents: price,
+                    title: &title,
+                    message: message.as_deref(),
+                    features: &feature,
+                    button_label: &button_label,
+                    visibility,
+                    show_files,
+                    show_files_no_limit,
+                })
+                .await?;
+            }
+            PaidContentCommands::Update {
+                game_id,
+                config,
+                id,
+                content_identifier,
+                pattern,
+                price,
+                title,
+                feature,
+                message,
+                button_label,
+                visibility,
+                show_files,
+                show_files_no_limit,
+            } => {
+                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                handle_paid_content_update(UpdatePaidContentArgs {
+                    game_id: &game_id,
+                    reference: paid_content_ref(id.as_deref(), content_identifier.as_deref())
+                        .expect("clap requires an entry to update"),
+                    patterns: passed(&pattern),
+                    price_cents: price,
+                    title: title.as_deref(),
+                    message: message.as_deref(),
+                    features: passed(&feature),
+                    button_label: button_label.as_deref(),
+                    visibility,
+                    show_files,
+                    show_files_no_limit,
+                })
+                .await?;
+            }
+            PaidContentCommands::Deactivate {
+                game_id,
+                config,
+                id,
+                content_identifier,
+                yes,
+            } => {
+                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                let reference = paid_content_ref(id.as_deref(), content_identifier.as_deref())
+                    .expect("clap requires an entry to deactivate");
+                handle_paid_content_deactivate(&game_id, reference, yes).await?;
+            }
+            PaidContentCommands::Resolve {
+                game_id,
+                config,
+                content_identifier,
+                id,
+                pattern,
+                show_files,
+                show_files_no_limit,
+                json,
+                strict,
+            } => {
+                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                handle_paid_content_resolve(ResolvePaidContentArgs {
+                    game_id: &game_id,
+                    patterns: &pattern,
+                    reference: paid_content_ref(id.as_deref(), content_identifier.as_deref()),
+                    show_files,
+                    show_files_no_limit,
+                    json_output: json,
+                    strict,
+                })
+                .await?;
+            }
+        },
         Commands::ClearPlaytestData {
             game_id,
             config,
@@ -855,6 +1280,16 @@ async fn run() -> Result<()> {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    /// clap only validates an argument definition when that subcommand's parser is
+    /// built, so a duplicate short flag stays invisible until someone runs the one
+    /// command that carries it. `debug_assert` walks the whole tree at once and
+    /// panics on duplicate shorts, ids, and conflicting settings — cheap insurance
+    /// every time a flag is added.
+    #[test]
+    fn every_subcommands_arguments_are_well_formed() {
+        Cli::command().debug_assert();
+    }
 
     /// A blank one would reach [`resolve_game_id`], which returns a typed flag
     /// verbatim, and land in a request URL as `/api/games//…`.
@@ -925,12 +1360,7 @@ mod tests {
 
         match cli.command {
             Some(Commands::Achievement {
-                action:
-                    AchievementCommands::List {
-                        game_id,
-                        json,
-                        ..
-                    },
+                action: AchievementCommands::List { game_id, json, .. },
             }) => {
                 assert_eq!(game_id.as_deref(), Some("game-id"));
                 assert!(json);

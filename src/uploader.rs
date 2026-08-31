@@ -298,7 +298,7 @@ async fn upload_file(
     Ok(())
 }
 
-fn format_bytes(bytes: u64) -> String {
+pub(crate) fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     if bytes == 0 {
         return "0 B".to_string();
