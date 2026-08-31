@@ -91,11 +91,11 @@ struct PaidContent {
     #[serde(rename = "priceCents")]
     price_cents: i64,
     title: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     message: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     features: Vec<String>,
-    #[serde(default, rename = "buttonLabel")]
+    #[serde(default, rename = "buttonLabel", deserialize_with = "null_to_default")]
     button_label: String,
 }
 
@@ -135,11 +135,24 @@ struct MatchReport {
     #[serde(rename = "gatedSizeBytes")]
     gated_size_bytes: u64,
     truncated: bool,
-    #[serde(rename = "perPattern")]
+    #[serde(rename = "perPattern", default, deserialize_with = "null_to_default")]
     per_pattern: Vec<PatternMatch>,
-    #[serde(rename = "zeroMatchPatterns")]
+    #[serde(
+        rename = "zeroMatchPatterns",
+        default,
+        deserialize_with = "null_to_default"
+    )]
     zero_match_patterns: Vec<String>,
+    #[serde(default, deserialize_with = "null_to_default")]
     matched: Vec<MatchedFile>,
+}
+
+fn null_to_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::deserialize(d)?.unwrap_or_default())
 }
 
 /// Swallows a malformed report so it cannot fail a write that already landed.
@@ -287,15 +300,16 @@ fn render_report(report: &MatchReport, listing: FileListing) -> String {
                 path_width = path_width
             ));
         }
-        let omitted = report.matched.len() - limit;
-        if omitted > 0 {
+        let unlisted = report.gated_files.saturating_sub(listed.len() as u64);
+        if unlisted > 0 {
+            let hint = if report.matched.len() > listed.len() {
+                " — pass --show-files-no-limit to list them"
+            } else {
+                ""
+            };
             out.push_str(&format!(
                 "    {}\n",
-                format!(
-                    "… and {} more — pass --show-files-no-limit to list them",
-                    omitted
-                )
-                .dimmed()
+                format!("… and {} more{}", unlisted, hint).dimmed()
             ));
         }
     }
@@ -530,17 +544,25 @@ pub async fn handle_paid_content_resolve(args: ResolvePaidContentArgs<'_>) -> Re
         print!("{}", render_report(&report, args.listing));
     }
 
-    if args.strict && !report.zero_match_patterns.is_empty() {
-        anyhow::bail!(
-            "{} pattern(s) matched no files: {}",
-            report.zero_match_patterns.len(),
-            report
-                .zero_match_patterns
-                .iter()
-                .map(|pattern| format!("\"{}\"", pattern))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+    if args.strict {
+        if report.build.is_none() {
+            anyhow::bail!(
+                "No completed build to check these patterns against. Push a build first."
+            );
+        }
+
+        if !report.zero_match_patterns.is_empty() {
+            anyhow::bail!(
+                "{} pattern(s) matched no files: {}",
+                report.zero_match_patterns.len(),
+                report
+                    .zero_match_patterns
+                    .iter()
+                    .map(|pattern| format!("\"{}\"", pattern))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
     }
 
     Ok(())
@@ -681,6 +703,26 @@ mod tests {
     }
 
     #[test]
+    fn a_server_that_sends_fewer_paths_than_it_gated_is_not_reported_as_complete() {
+        let mut report = report_with(500, vec![("levels/**", 5000)]);
+        report.gated_files = 5000;
+        let rendered = render_report(&report, FileListing::Full);
+        assert!(rendered.contains("… and 4500 more"), "{rendered}");
+        assert!(
+            !rendered.contains("--show-files-no-limit"),
+            "the flag cannot reveal paths the server never sent: {rendered}"
+        );
+    }
+
+    #[test]
+    fn the_local_cap_still_points_at_the_flag_that_lifts_it() {
+        let report = report_with(60, vec![("levels/**", 60)]);
+        let rendered = render_report(&report, FileListing::Capped);
+        assert!(rendered.contains("… and 10 more"), "{rendered}");
+        assert!(rendered.contains("--show-files-no-limit"), "{rendered}");
+    }
+
+    #[test]
     fn report_handles_a_game_with_no_completed_build() {
         let mut report = report_with(0, vec![("levels/**", 0)]);
         report.build = None;
@@ -714,6 +756,45 @@ mod tests {
         assert_eq!(entry.content_identifier, "full-version");
         assert_eq!(entry.visibility, "playtest");
         assert_eq!(entry.price_cents, 499);
+    }
+
+    #[test]
+    fn a_null_or_absent_collection_does_not_lose_the_whole_listing() {
+        let response: PaidContentListResponse = serde_json::from_value(json!({
+            "paidContent": [{
+                "_id": "paid-content-id",
+                "contentIdentifier": "full-version",
+                "pathPatterns": ["levels/**"],
+                "visibility": "live",
+                "priceCents": 499,
+                "title": "Unlock",
+                "message": null,
+                "features": null
+            }]
+        }))
+        .expect("a null field must not abort the whole listing");
+
+        let entry = &response.paid_content[0];
+        assert_eq!(entry.message, "");
+        assert!(entry.features.is_empty());
+        assert_eq!(entry.button_label, "");
+    }
+
+    #[test]
+    fn an_empty_report_collection_may_be_omitted_or_null() {
+        let report: MatchReport = serde_json::from_value(json!({
+            "build": { "buildNumber": 7 },
+            "totalFiles": 13,
+            "gatedFiles": 0,
+            "gatedSizeBytes": 0,
+            "truncated": false,
+            "perPattern": [],
+            "zeroMatchPatterns": null
+        }))
+        .expect("an omitted or null collection should not void the report");
+
+        assert!(report.zero_match_patterns.is_empty());
+        assert!(report.matched.is_empty());
     }
 
     #[test]

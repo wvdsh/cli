@@ -16,14 +16,19 @@ use std::process::{Command, Output};
 
 const BIN: &str = env!("CARGO_BIN_EXE_wavedash");
 
-fn run(args: &[&str]) -> Output {
-    Command::new(BIN)
-        .args(args)
+fn command(args: &[&str]) -> Command {
+    let mut cmd = Command::new(BIN);
+    cmd.args(args)
         .env_remove("WAVEDASH_TOKEN")
         .env_remove("WAVEDASH_GAME_ID")
         .env_remove("WAVEDASH_UPLOAD_DIR")
         .env_remove("CI")
-        .env("HOME", env!("CARGO_TARGET_TMPDIR"))
+        .env("HOME", env!("CARGO_TARGET_TMPDIR"));
+    cmd
+}
+
+fn run(args: &[&str]) -> Output {
+    command(args)
         .output()
         .expect("the wavedash binary should run")
 }
@@ -215,6 +220,15 @@ fn resolves_positional_names_an_entry_not_a_glob() {
 }
 
 #[test]
+fn strict_advertises_that_it_needs_a_build() {
+    let help = stdout(&run(&["paid-content", "resolve", "--help"]));
+    assert!(
+        help.contains("confirmed to gate files"),
+        "--strict promises confirmation, not just a zero-match check:\n{help}"
+    );
+}
+
+#[test]
 fn a_price_that_is_not_whole_cents_is_rejected_before_any_request() {
     let out = run(&[
         "paid-content",
@@ -353,20 +367,18 @@ fn visibility_only_accepts_the_settable_values() {
 
 #[test]
 fn deactivate_refuses_to_guess_when_it_cannot_prompt() {
-    let out = Command::new(BIN)
-        .args([
-            "paid-content",
-            "deactivate",
-            "--game-id",
-            "g",
-            "--id",
-            "pc_1",
-        ])
-        .env_remove("WAVEDASH_GAME_ID")
-        .env("WAVEDASH_TOKEN", "not-a-real-key")
-        .env("CI", "1")
-        .output()
-        .expect("the wavedash binary should run");
+    let out = command(&[
+        "paid-content",
+        "deactivate",
+        "--game-id",
+        "g",
+        "--id",
+        "pc_1",
+    ])
+    .env("WAVEDASH_TOKEN", "not-a-real-key")
+    .env("CI", "1")
+    .output()
+    .expect("the wavedash binary should run");
     assert!(!out.status.success());
     let message = format!("{}{}", stdout(&out), stderr(&out));
     assert!(

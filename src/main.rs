@@ -798,7 +798,10 @@ enum PaidContentCommands {
         show_files_no_limit: bool,
         #[arg(long, help = "Output the full report as JSON")]
         json: bool,
-        #[arg(long, help = "Exit non-zero if any pattern matches no files")]
+        #[arg(
+            long,
+            help = "Exit non-zero unless the patterns are confirmed to gate files"
+        )]
         strict: bool,
     },
 }
