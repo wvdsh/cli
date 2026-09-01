@@ -75,11 +75,13 @@ fn deactivate_is_reachable_as_delete_and_del() {
 }
 
 #[test]
-fn the_two_file_listing_flags_are_distinguishable_in_help() {
-    let out = run(&["paid-content", "resolve", "--help"]);
-    let help = stdout(&out);
-    assert!(help.contains("--show-files"), "{help}");
-    assert!(help.contains("--show-files-no-limit"), "{help}");
+fn the_listing_needs_no_flag_to_appear() {
+    let help = stdout(&run(&["paid-content", "resolve", "--help"]));
+    assert!(help.contains("--all-files"), "{help}");
+    assert!(
+        !help.contains("--show-files"),
+        "the listing prints by default; there is nothing to switch on:\n{help}"
+    );
 }
 
 #[test]
@@ -117,7 +119,7 @@ fn the_concise_long_aliases_parse_the_same_as_their_canonical_forms() {
         "All peaks",
         "--visible",
         "live",
-        "--show",
+        "--all-files",
     ]);
     let message = format!("{}{}", stdout(&out), stderr(&out));
     assert!(
@@ -278,34 +280,47 @@ fn a_price_outside_the_platform_range_is_left_to_the_server() {
 }
 
 #[test]
-fn create_requires_at_least_one_pattern_and_one_feature() {
-    for missing in ["--pattern", "--feature"] {
-        let mut args = vec![
-            "paid-content",
-            "create",
-            "--game-id",
-            "g",
-            "full-version",
-            "--price",
-            "4.99",
-            "--title",
-            "t",
-            "--pattern",
-            "levels/**",
-            "--feature",
-            "f",
-        ];
-        let at = args.iter().position(|a| *a == missing).unwrap();
-        args.drain(at..at + 2);
+fn create_requires_a_feature_but_not_a_pattern() {
+    let base = [
+        "paid-content",
+        "create",
+        "--game-id",
+        "g",
+        "full-version",
+        "--price",
+        "4.99",
+        "--title",
+        "t",
+        "--pattern",
+        "levels/**",
+        "--feature",
+        "f",
+    ];
 
-        let out = run(&args);
-        assert!(!out.status.success(), "{missing} should be required");
-        assert!(
-            stderr(&out).contains(missing),
-            "the error should name {missing}: {}",
-            stderr(&out)
-        );
-    }
+    let mut without_feature = base.to_vec();
+    let at = without_feature
+        .iter()
+        .position(|a| *a == "--feature")
+        .unwrap();
+    without_feature.drain(at..at + 2);
+    let out = run(&without_feature);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("--feature"), "{}", stderr(&out));
+
+    let mut without_pattern = base.to_vec();
+    let at = without_pattern
+        .iter()
+        .position(|a| *a == "--pattern")
+        .unwrap();
+    without_pattern.drain(at..at + 2);
+    let message = {
+        let out = run(&without_pattern);
+        format!("{}{}", stdout(&out), stderr(&out))
+    };
+    assert!(
+        !message.contains("required"),
+        "paid content that gates no files is a supported state: {message}"
+    );
 }
 
 #[test]

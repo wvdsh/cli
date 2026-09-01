@@ -10,7 +10,7 @@ use reqwest::{Method, RequestBuilder};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::json;
 
-const FILE_LISTING_LIMIT: usize = 50;
+const FILE_LISTING_LIMIT: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Visibility {
@@ -23,23 +23,6 @@ impl Visibility {
         match self {
             Visibility::Playtest => "playtest",
             Visibility::Live => "live",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FileListing {
-    Hidden,
-    Capped,
-    Full,
-}
-
-impl FileListing {
-    pub fn from_flags(show_files: bool, no_limit: bool) -> Self {
-        match (show_files, no_limit) {
-            (_, true) => FileListing::Full,
-            (true, false) => FileListing::Capped,
-            (false, false) => FileListing::Hidden,
         }
     }
 }
@@ -222,7 +205,7 @@ fn files_noun(count: u64) -> &'static str {
     }
 }
 
-fn render_report(report: &MatchReport, listing: FileListing) -> String {
+fn render_report(report: &MatchReport, all_files: bool) -> String {
     let mut out = String::new();
 
     let Some(build) = &report.build else {
@@ -280,11 +263,12 @@ fn render_report(report: &MatchReport, listing: FileListing) -> String {
         format_bytes(report.gated_size_bytes)
     ));
 
-    if listing != FileListing::Hidden && !report.matched.is_empty() {
+    if !report.matched.is_empty() {
         out.push('\n');
-        let limit = match listing {
-            FileListing::Full => report.matched.len(),
-            _ => FILE_LISTING_LIMIT.min(report.matched.len()),
+        let limit = if all_files {
+            report.matched.len()
+        } else {
+            FILE_LISTING_LIMIT.min(report.matched.len())
         };
         let listed = &report.matched[..limit];
         let path_width = listed
@@ -300,16 +284,22 @@ fn render_report(report: &MatchReport, listing: FileListing) -> String {
                 path_width = path_width
             ));
         }
-        let unlisted = report.gated_files.saturating_sub(listed.len() as u64);
-        if unlisted > 0 {
-            let hint = if report.matched.len() > listed.len() {
-                " — pass --show-files-no-limit to list them"
-            } else {
-                ""
-            };
+
+        let capped = report.matched.len() - listed.len();
+        if capped > 0 {
             out.push_str(&format!(
                 "    {}\n",
-                format!("… and {} more{}", unlisted, hint).dimmed()
+                format!("… and {} more — pass --all-files to list them", capped).dimmed()
+            ));
+        }
+
+        let unsent = report
+            .gated_files
+            .saturating_sub(report.matched.len() as u64);
+        if unsent > 0 {
+            out.push_str(&format!(
+                "    {}\n",
+                format!("… and {} more not sent by the server", unsent).dimmed()
             ));
         }
     }
@@ -317,9 +307,9 @@ fn render_report(report: &MatchReport, listing: FileListing) -> String {
     out
 }
 
-fn print_report(report: Option<&MatchReport>, listing: FileListing) {
+fn print_report(report: Option<&MatchReport>, all_files: bool) {
     if let Some(report) = report {
-        print!("{}", render_report(report, listing));
+        print!("{}", render_report(report, all_files));
     }
 }
 
@@ -379,7 +369,7 @@ pub struct CreatePaidContentArgs<'a> {
     pub features: &'a [String],
     pub button_label: &'a str,
     pub visibility: Visibility,
-    pub listing: FileListing,
+    pub all_files: bool,
 }
 
 pub async fn handle_paid_content_create(args: CreatePaidContentArgs<'_>) -> Result<()> {
@@ -407,7 +397,7 @@ pub async fn handle_paid_content_create(args: CreatePaidContentArgs<'_>) -> Resu
         "✓ Created paid content \"{}\" (id: {})",
         created.content_identifier, created._id
     );
-    print_report(created.match_report.as_ref(), args.listing);
+    print_report(created.match_report.as_ref(), args.all_files);
     Ok(())
 }
 
@@ -421,7 +411,7 @@ pub struct UpdatePaidContentArgs<'a> {
     pub features: Option<&'a [String]>,
     pub button_label: Option<&'a str>,
     pub visibility: Option<Visibility>,
-    pub listing: FileListing,
+    pub all_files: bool,
 }
 
 pub async fn handle_paid_content_update(args: UpdatePaidContentArgs<'_>) -> Result<()> {
@@ -468,7 +458,7 @@ pub async fn handle_paid_content_update(args: UpdatePaidContentArgs<'_>) -> Resu
     let updated: UpdatedPaidContent = resp.json().await?;
 
     println!("✓ Updated paid content {}", args.reference.value());
-    print_report(updated.match_report.as_ref(), args.listing);
+    print_report(updated.match_report.as_ref(), args.all_files);
     Ok(())
 }
 
@@ -515,7 +505,7 @@ pub struct ResolvePaidContentArgs<'a> {
     pub game_id: &'a str,
     pub patterns: &'a [String],
     pub reference: Option<PaidContentRef<'a>>,
-    pub listing: FileListing,
+    pub all_files: bool,
     pub json_output: bool,
     pub strict: bool,
 }
@@ -541,7 +531,7 @@ pub async fn handle_paid_content_resolve(args: ResolvePaidContentArgs<'_>) -> Re
     if args.json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        print!("{}", render_report(&report, args.listing));
+        print!("{}", render_report(&report, args.all_files));
     }
 
     if args.strict {
@@ -655,78 +645,69 @@ mod tests {
     }
 
     #[test]
-    fn report_echoes_every_pattern_verbatim_even_without_the_listing() {
+    fn report_echoes_every_pattern_verbatim() {
         let report = report_with(4, vec![("levels/bonus/**", 4)]);
-        let rendered = render_report(&report, FileListing::Hidden);
+        let rendered = render_report(&report, false);
         assert!(
             rendered.contains("\"levels/bonus/**\""),
             "the pattern must be echoed back so shell expansion is visible: {rendered}"
         );
         assert!(rendered.contains("4 of 13 files gated"));
-        assert!(!rendered.contains("levels/bonus/file0.dat"));
+    }
+
+    #[test]
+    fn a_short_listing_prints_without_being_asked() {
+        let report = report_with(4, vec![("levels/bonus/**", 4)]);
+        let rendered = render_report(&report, false);
+        assert!(rendered.contains("levels/bonus/file0.dat"), "{rendered}");
+        assert!(rendered.contains("levels/bonus/file3.dat"), "{rendered}");
+        assert!(!rendered.contains("… and"), "{rendered}");
+    }
+
+    #[test]
+    fn a_long_listing_caps_and_points_at_the_flag_that_lifts_it() {
+        let report = report_with(60, vec![("levels/**", 60)]);
+        let rendered = render_report(&report, false);
+        assert!(rendered.contains("levels/bonus/file9.dat"), "{rendered}");
+        assert!(!rendered.contains("levels/bonus/file10.dat"), "{rendered}");
+        assert!(
+            rendered.contains("… and 50 more — pass --all-files to list them"),
+            "{rendered}"
+        );
     }
 
     #[test]
     fn report_flags_a_pattern_that_matches_nothing() {
         let report = report_with(0, vec![("art/cutscenes/*.webm", 0)]);
-        let rendered = render_report(&report, FileListing::Hidden);
+        let rendered = render_report(&report, false);
         assert!(rendered.contains("matches nothing"), "{rendered}");
     }
 
     #[test]
-    fn file_listing_truncates_and_says_how_many_it_omitted() {
+    fn every_matched_path_is_listed() {
         let report = report_with(60, vec![("levels/**", 60)]);
-        let rendered = render_report(&report, FileListing::Capped);
+        let rendered = render_report(&report, true);
         assert!(rendered.contains("levels/bonus/file0.dat"));
-        assert!(!rendered.contains("levels/bonus/file59.dat"));
-        assert!(
-            rendered.contains("… and 10 more"),
-            "a cap that hides itself reads as a complete listing: {rendered}"
-        );
-        assert!(rendered.contains("--show-files-no-limit"));
-    }
-
-    #[test]
-    fn a_full_listing_names_every_matched_path() {
-        let report = report_with(60, vec![("levels/**", 60)]);
-        let rendered = render_report(&report, FileListing::Full);
         assert!(rendered.contains("levels/bonus/file59.dat"));
         assert!(!rendered.contains("… and"));
     }
 
     #[test]
-    fn no_limit_implies_a_listing_whatever_show_files_said() {
-        assert_eq!(FileListing::from_flags(false, false), FileListing::Hidden);
-        assert_eq!(FileListing::from_flags(true, false), FileListing::Capped);
-        assert_eq!(FileListing::from_flags(true, true), FileListing::Full);
-        assert_eq!(FileListing::from_flags(false, true), FileListing::Full);
-    }
-
-    #[test]
-    fn a_server_that_sends_fewer_paths_than_it_gated_is_not_reported_as_complete() {
+    fn a_server_that_sends_fewer_paths_than_it_gated_says_so() {
         let mut report = report_with(500, vec![("levels/**", 5000)]);
         report.gated_files = 5000;
-        let rendered = render_report(&report, FileListing::Full);
-        assert!(rendered.contains("… and 4500 more"), "{rendered}");
+        let rendered = render_report(&report, true);
         assert!(
-            !rendered.contains("--show-files-no-limit"),
-            "the flag cannot reveal paths the server never sent: {rendered}"
+            rendered.contains("… and 4500 more not sent by the server"),
+            "{rendered}"
         );
-    }
-
-    #[test]
-    fn the_local_cap_still_points_at_the_flag_that_lifts_it() {
-        let report = report_with(60, vec![("levels/**", 60)]);
-        let rendered = render_report(&report, FileListing::Capped);
-        assert!(rendered.contains("… and 10 more"), "{rendered}");
-        assert!(rendered.contains("--show-files-no-limit"), "{rendered}");
     }
 
     #[test]
     fn report_handles_a_game_with_no_completed_build() {
         let mut report = report_with(0, vec![("levels/**", 0)]);
         report.build = None;
-        let rendered = render_report(&report, FileListing::Capped);
+        let rendered = render_report(&report, true);
         assert!(rendered.contains("No completed build yet"), "{rendered}");
     }
 
@@ -734,7 +715,7 @@ mod tests {
     fn truncated_index_is_reported_rather_than_hidden() {
         let mut report = report_with(4, vec![("levels/**", 4)]);
         report.truncated = true;
-        let rendered = render_report(&report, FileListing::Hidden);
+        let rendered = render_report(&report, false);
         assert!(rendered.contains("counts are a floor"), "{rendered}");
     }
 
@@ -814,7 +795,7 @@ mod tests {
     fn the_summary_pluralises_on_the_total_it_follows() {
         let mut report = report_with(1, vec![("levels/boss.dat", 1)]);
         report.total_files = 1;
-        let rendered = render_report(&report, FileListing::Hidden);
+        let rendered = render_report(&report, false);
         assert!(rendered.contains("1 file indexed"), "{rendered}");
         assert!(rendered.contains("1 of 1 file gated"), "{rendered}");
     }

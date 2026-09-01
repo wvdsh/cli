@@ -555,8 +555,7 @@ enum PaidContentCommands {
             visible_alias = "glob",
             help = "Glob for a build file to lock; pass multiple times. QUOTE IT — an unquoted glob is expanded by your shell",
             action = clap::ArgAction::Append,
-            num_args = 1,
-            required = true
+            num_args = 1
         )]
         pattern: Vec<String>,
         #[arg(
@@ -595,19 +594,11 @@ enum PaidContentCommands {
         )]
         visibility: Visibility,
         #[arg(
-            long = "show-files",
-            visible_alias = "show",
-            help = "List the matched file paths",
+            long = "all-files",
+            help = "List every matched path instead of the first 10",
             help_heading = "Match report"
         )]
-        show_files: bool,
-        #[arg(
-            long = "show-files-no-limit",
-            visible_alias = "show-all",
-            help = "List every matched path instead of the first 50",
-            help_heading = "Match report"
-        )]
-        show_files_no_limit: bool,
+        all_files: bool,
     },
     #[command(
         about = "Update paid content; only the fields you pass change",
@@ -684,19 +675,11 @@ enum PaidContentCommands {
         )]
         visibility: Option<Visibility>,
         #[arg(
-            long = "show-files",
-            visible_alias = "show",
-            help = "List the matched file paths",
+            long = "all-files",
+            help = "List every matched path instead of the first 10",
             help_heading = "Match report"
         )]
-        show_files: bool,
-        #[arg(
-            long = "show-files-no-limit",
-            visible_alias = "show-all",
-            help = "List every matched path instead of the first 50",
-            help_heading = "Match report"
-        )]
-        show_files_no_limit: bool,
+        all_files: bool,
     },
     #[command(
         visible_aliases = ["delete", "del"],
@@ -783,19 +766,11 @@ enum PaidContentCommands {
         )]
         pattern: Vec<String>,
         #[arg(
-            long = "show-files",
-            visible_alias = "show",
-            help = "List the matched file paths",
+            long = "all-files",
+            help = "List every matched path instead of the first 10",
             help_heading = "Match report"
         )]
-        show_files: bool,
-        #[arg(
-            long = "show-files-no-limit",
-            visible_alias = "show-all",
-            help = "List every matched path instead of the first 50",
-            help_heading = "Match report"
-        )]
-        show_files_no_limit: bool,
+        all_files: bool,
         #[arg(long, help = "Output the full report as JSON")]
         json: bool,
         #[arg(
@@ -1161,8 +1136,7 @@ async fn run() -> Result<()> {
                 message,
                 button_label,
                 visibility,
-                show_files,
-                show_files_no_limit,
+                all_files,
             } => {
                 let game_id = resolve_game_id(game_id.as_deref(), &config)?;
                 handle_paid_content_create(CreatePaidContentArgs {
@@ -1175,7 +1149,7 @@ async fn run() -> Result<()> {
                     features: &feature,
                     button_label: &button_label,
                     visibility,
-                    listing: paid_content::FileListing::from_flags(show_files, show_files_no_limit),
+                    all_files,
                 })
                 .await?;
             }
@@ -1191,8 +1165,7 @@ async fn run() -> Result<()> {
                 message,
                 button_label,
                 visibility,
-                show_files,
-                show_files_no_limit,
+                all_files,
             } => {
                 let game_id = resolve_game_id(game_id.as_deref(), &config)?;
                 handle_paid_content_update(UpdatePaidContentArgs {
@@ -1206,7 +1179,7 @@ async fn run() -> Result<()> {
                     features: passed(&feature),
                     button_label: button_label.as_deref(),
                     visibility,
-                    listing: paid_content::FileListing::from_flags(show_files, show_files_no_limit),
+                    all_files,
                 })
                 .await?;
             }
@@ -1228,8 +1201,7 @@ async fn run() -> Result<()> {
                 content_identifier,
                 id,
                 pattern,
-                show_files,
-                show_files_no_limit,
+                all_files,
                 json,
                 strict,
             } => {
@@ -1238,7 +1210,7 @@ async fn run() -> Result<()> {
                     game_id: &game_id,
                     patterns: &pattern,
                     reference: paid_content_ref(id.as_deref(), content_identifier.as_deref()),
-                    listing: paid_content::FileListing::from_flags(show_files, show_files_no_limit),
+                    all_files,
                     json_output: json,
                     strict,
                 })
