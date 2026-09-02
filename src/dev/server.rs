@@ -199,6 +199,7 @@ struct ExchangeResponse {
 async fn handle_callback(
     State(cfg): State<Arc<ServeConfig>>,
     headers: HeaderMap,
+    uri: Uri,
     Query(p): Query<CallbackParams>,
 ) -> Response {
     if p.state != cfg.state_token {
@@ -238,7 +239,7 @@ async fn handle_callback(
 
     let mut builder = Response::builder()
         .status(StatusCode::SEE_OTHER)
-        .header(header::LOCATION, "/")
+        .header(header::LOCATION, game_url_after_callback(uri.query()))
         .header(header::CACHE_CONTROL, "no-store")
         .header(
             header::SET_COOKIE,
@@ -498,7 +499,7 @@ async fn handle_index(
     uri: Uri,
 ) -> Response {
     let Some(config) = browser_config(&cfg, &headers) else {
-        return Redirect::to(&cfg.auth_url).into_response();
+        return bounce_to_auth(&cfg, &uri);
     };
 
     if let Some(engine_entry) = &cfg.engine_entry {
@@ -533,9 +534,39 @@ async fn handle_static(
     // An HTML nav without this browser's cookies is stale state (cookies
     // cleared) — re-run the handoff instead of serving a game that will 401.
     if config.is_none() && is_html_path(uri.path()) {
-        return Redirect::to(&cfg.auth_url).into_response();
+        return bounce_to_auth(&cfg, &uri);
     }
     serve_file(&cfg, uri.path(), config.as_deref())
+}
+
+fn bounce_to_auth(cfg: &ServeConfig, uri: &Uri) -> Response {
+    Redirect::to(&auth_url_with_query(&cfg.auth_url, uri.query())).into_response()
+}
+
+fn auth_url_with_query(auth_url: &str, query: Option<&str>) -> String {
+    match query {
+        Some(q) if !q.is_empty() => format!("{auth_url}&{q}"),
+        _ => auth_url.to_string(),
+    }
+}
+
+const CALLBACK_PARAMS: [&str; 3] = ["play_key", "sdkconfig", "state"];
+
+fn game_url_after_callback(query: Option<&str>) -> String {
+    let passthrough: Vec<&str> = query
+        .unwrap_or_default()
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .filter(|pair| {
+            let key = pair.split_once('=').map(|(k, _)| k).unwrap_or(pair);
+            !CALLBACK_PARAMS.contains(&key)
+        })
+        .collect();
+    if passthrough.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/?{}", passthrough.join("&"))
+    }
 }
 
 fn is_html_path(path: &str) -> bool {
@@ -740,6 +771,32 @@ mod tests {
         assert!(
             url.contains(&format!("@wvdsh/sdk-js@{}/", SDK_JS_VERSION.trim())),
             "{url:?}"
+        );
+    }
+
+    #[test]
+    fn the_auth_bounce_carries_the_requested_query_verbatim() {
+        let base = "https://wavedash.com/auth/dev?build_uuid=u&callback_uri=c&state=s";
+        assert_eq!(auth_url_with_query(base, None), base);
+        assert_eq!(auth_url_with_query(base, Some("")), base);
+        assert_eq!(
+            auth_url_with_query(base, Some("wvdsh_lobby=abc&level=3&a%20b=c+d")),
+            format!("{base}&wvdsh_lobby=abc&level=3&a%20b=c+d")
+        );
+    }
+
+    #[test]
+    fn the_callback_forwards_everything_but_its_own_params_to_the_game() {
+        assert_eq!(game_url_after_callback(None), "/");
+        assert_eq!(
+            game_url_after_callback(Some("play_key=k&sdkconfig=%7B%7D&state=s")),
+            "/"
+        );
+        assert_eq!(
+            game_url_after_callback(Some(
+                "wvdsh_lobby=abc&play_key=k&sdkconfig=%7B%7D&state=s&flag&x=1%3D2"
+            )),
+            "/?wvdsh_lobby=abc&flag&x=1%3D2"
         );
     }
 
