@@ -185,6 +185,8 @@ struct CallbackParams {
     state: String,
 }
 
+const CALLBACK_PARAMS: [&str; 3] = ["play_key", "sdkconfig", "state"];
+
 #[derive(Deserialize)]
 struct ExchangeResponse {
     #[serde(rename = "sessionToken")]
@@ -199,6 +201,7 @@ struct ExchangeResponse {
 async fn handle_callback(
     State(cfg): State<Arc<ServeConfig>>,
     headers: HeaderMap,
+    uri: Uri,
     Query(p): Query<CallbackParams>,
 ) -> Response {
     if p.state != cfg.state_token {
@@ -238,7 +241,7 @@ async fn handle_callback(
 
     let mut builder = Response::builder()
         .status(StatusCode::SEE_OTHER)
-        .header(header::LOCATION, "/")
+        .header(header::LOCATION, game_url_after_callback(uri.query()))
         .header(header::CACHE_CONTROL, "no-store")
         .header(
             header::SET_COOKIE,
@@ -498,7 +501,7 @@ async fn handle_index(
     uri: Uri,
 ) -> Response {
     let Some(config) = browser_config(&cfg, &headers) else {
-        return Redirect::to(&cfg.auth_url).into_response();
+        return bounce_to_auth(&cfg, &uri);
     };
 
     if let Some(engine_entry) = &cfg.engine_entry {
@@ -533,9 +536,54 @@ async fn handle_static(
     // An HTML nav without this browser's cookies is stale state (cookies
     // cleared) — re-run the handoff instead of serving a game that will 401.
     if config.is_none() && is_html_path(uri.path()) {
-        return Redirect::to(&cfg.auth_url).into_response();
+        return bounce_to_auth(&cfg, &uri);
     }
     serve_file(&cfg, uri.path(), config.as_deref())
+}
+
+fn bounce_to_auth(cfg: &ServeConfig, uri: &Uri) -> Response {
+    Redirect::to(&auth_url_with_query(&cfg.auth_url, uri.query())).into_response()
+}
+
+fn auth_url_with_query(auth_url: &str, query: Option<&str>) -> String {
+    let (base, reserved) = match auth_url.split_once('?') {
+        Some((base, existing)) => (base, existing),
+        None => (auth_url, ""),
+    };
+    let reserved_keys: Vec<&str> = query_keys(reserved).collect();
+    let mut pairs: Vec<&str> = query_pairs(reserved).collect();
+    pairs.extend(
+        query_pairs(query.unwrap_or_default())
+            .filter(|pair| !reserved_keys.contains(&query_key(pair))),
+    );
+    if pairs.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}?{}", pairs.join("&"))
+    }
+}
+
+fn game_url_after_callback(query: Option<&str>) -> String {
+    let passthrough: Vec<&str> = query_pairs(query.unwrap_or_default())
+        .filter(|pair| !CALLBACK_PARAMS.contains(&query_key(pair)))
+        .collect();
+    if passthrough.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/?{}", passthrough.join("&"))
+    }
+}
+
+fn query_pairs(query: &str) -> impl Iterator<Item = &str> {
+    query.split('&').filter(|pair| !pair.is_empty())
+}
+
+fn query_keys(query: &str) -> impl Iterator<Item = &str> {
+    query_pairs(query).map(query_key)
+}
+
+fn query_key(pair: &str) -> &str {
+    pair.split_once('=').map(|(k, _)| k).unwrap_or(pair)
 }
 
 fn is_html_path(path: &str) -> bool {
@@ -740,6 +788,80 @@ mod tests {
         assert!(
             url.contains(&format!("@wvdsh/sdk-js@{}/", SDK_JS_VERSION.trim())),
             "{url:?}"
+        );
+    }
+
+    #[test]
+    fn the_auth_bounce_carries_the_requested_query_verbatim() {
+        let base = "https://wavedash.com/auth/dev?build_uuid=u&callback_uri=c&state=s";
+        assert_eq!(auth_url_with_query(base, None), base);
+        assert_eq!(auth_url_with_query(base, Some("")), base);
+        assert_eq!(
+            auth_url_with_query(base, Some("wvdsh_lobby=abc&level=3&a%20b=c+d")),
+            format!("{base}&wvdsh_lobby=abc&level=3&a%20b=c+d")
+        );
+    }
+
+    #[test]
+    fn the_auth_bounce_keeps_its_own_params_over_the_browsers() {
+        let base = "https://wavedash.com/auth/dev?build_uuid=u&callback_uri=c&state=s";
+        assert_eq!(
+            auth_url_with_query(base, Some("state=lobby7&build_uuid=x&level=3&state")),
+            format!("{base}&level=3")
+        );
+    }
+
+    #[test]
+    fn the_auth_bounce_starts_a_query_when_the_auth_url_has_none() {
+        let base = "https://wavedash.com/auth/dev";
+        assert_eq!(auth_url_with_query(base, None), base);
+        assert_eq!(
+            auth_url_with_query(base, Some("wvdsh_lobby=abc")),
+            format!("{base}?wvdsh_lobby=abc")
+        );
+    }
+
+    #[test]
+    fn the_callback_param_list_matches_the_callback_struct() {
+        let query = CALLBACK_PARAMS
+            .iter()
+            .map(|k| format!("{k}=v"))
+            .collect::<Vec<_>>()
+            .join("&");
+        assert!(parse_callback(&query).is_ok());
+        for skipped in CALLBACK_PARAMS {
+            let partial = CALLBACK_PARAMS
+                .iter()
+                .filter(|k| **k != skipped)
+                .map(|k| format!("{k}=v"))
+                .collect::<Vec<_>>()
+                .join("&");
+            assert!(
+                parse_callback(&partial).is_err(),
+                "{skipped} is listed but not a required callback field"
+            );
+        }
+    }
+
+    fn parse_callback(
+        query: &str,
+    ) -> Result<CallbackParams, axum::extract::rejection::QueryRejection> {
+        let uri: Uri = format!("/__wavedash/callback?{query}").parse().unwrap();
+        Query::<CallbackParams>::try_from_uri(&uri).map(|q| q.0)
+    }
+
+    #[test]
+    fn the_callback_forwards_everything_but_its_own_params_to_the_game() {
+        assert_eq!(game_url_after_callback(None), "/");
+        assert_eq!(
+            game_url_after_callback(Some("play_key=k&sdkconfig=%7B%7D&state=s")),
+            "/"
+        );
+        assert_eq!(
+            game_url_after_callback(Some(
+                "wvdsh_lobby=abc&play_key=k&sdkconfig=%7B%7D&state=s&flag&x=1%3D2"
+            )),
+            "/?wvdsh_lobby=abc&flag&x=1%3D2"
         );
     }
 
