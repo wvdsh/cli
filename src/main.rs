@@ -599,6 +599,12 @@ enum PaidContentCommands {
             help_heading = "Match report"
         )]
         all_files: bool,
+        #[arg(
+            long = "allow-no-matches",
+            help = "Create it even when the patterns gate no files or there is no build to check against",
+            help_heading = "Match report"
+        )]
+        allow_no_matches: bool,
     },
     #[command(
         about = "Update paid content; only the fields you pass change",
@@ -680,6 +686,12 @@ enum PaidContentCommands {
             help_heading = "Match report"
         )]
         all_files: bool,
+        #[arg(
+            long = "allow-no-matches",
+            help = "Apply it even when the patterns gate no files or there is no build to check against",
+            help_heading = "Match report"
+        )]
+        allow_no_matches: bool,
     },
     #[command(
         visible_aliases = ["delete", "del"],
@@ -774,10 +786,10 @@ enum PaidContentCommands {
         #[arg(long, help = "Output the full report as JSON")]
         json: bool,
         #[arg(
-            long,
-            help = "Exit non-zero unless the patterns are confirmed to gate files"
+            long = "allow-no-matches",
+            help = "Exit 0 even when the patterns gate no files or there is no build to check against"
         )]
-        strict: bool,
+        allow_no_matches: bool,
     },
 }
 
@@ -1137,6 +1149,7 @@ async fn run() -> Result<()> {
                 button_label,
                 visibility,
                 all_files,
+                allow_no_matches,
             } => {
                 let game_id = resolve_game_id(game_id.as_deref(), &config)?;
                 handle_paid_content_create(CreatePaidContentArgs {
@@ -1150,6 +1163,7 @@ async fn run() -> Result<()> {
                     button_label: &button_label,
                     visibility,
                     all_files,
+                    allow_no_matches,
                 })
                 .await?;
             }
@@ -1166,6 +1180,7 @@ async fn run() -> Result<()> {
                 button_label,
                 visibility,
                 all_files,
+                allow_no_matches,
             } => {
                 let game_id = resolve_game_id(game_id.as_deref(), &config)?;
                 handle_paid_content_update(UpdatePaidContentArgs {
@@ -1180,6 +1195,7 @@ async fn run() -> Result<()> {
                     button_label: button_label.as_deref(),
                     visibility,
                     all_files,
+                    allow_no_matches,
                 })
                 .await?;
             }
@@ -1203,7 +1219,7 @@ async fn run() -> Result<()> {
                 pattern,
                 all_files,
                 json,
-                strict,
+                allow_no_matches,
             } => {
                 let game_id = resolve_game_id(game_id.as_deref(), &config)?;
                 handle_paid_content_resolve(ResolvePaidContentArgs {
@@ -1212,7 +1228,7 @@ async fn run() -> Result<()> {
                     reference: paid_content_ref(id.as_deref(), content_identifier.as_deref()),
                     all_files,
                     json_output: json,
-                    strict,
+                    allow_no_matches,
                 })
                 .await?;
             }

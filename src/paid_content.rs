@@ -36,7 +36,7 @@ pub enum PaidContentRef<'a> {
 impl PaidContentRef<'_> {
     fn path_segment(&self) -> String {
         match self {
-            PaidContentRef::Id(id) => format!("/{}", id),
+            PaidContentRef::Id(id) => format!("/{}", urlencoding::encode(id)),
             PaidContentRef::ContentIdentifier(identifier) => {
                 format!("/by-identifier/{}", urlencoding::encode(identifier))
             }
@@ -385,10 +385,21 @@ pub struct CreatePaidContentArgs<'a> {
     pub button_label: &'a str,
     pub visibility: Visibility,
     pub all_files: bool,
+    pub allow_no_matches: bool,
 }
 
 pub async fn handle_paid_content_create(args: CreatePaidContentArgs<'_>) -> Result<()> {
     let api_key = require_api_key()?;
+    if !args.allow_no_matches {
+        refuse_ungated(
+            &api_key,
+            args.game_id,
+            args.patterns,
+            args.all_files,
+            "create",
+        )
+        .await?;
+    }
     let body = json!({
         "contentIdentifier": args.content_identifier,
         "pathPatterns": args.patterns,
@@ -427,6 +438,7 @@ pub struct UpdatePaidContentArgs<'a> {
     pub button_label: Option<&'a str>,
     pub visibility: Option<Visibility>,
     pub all_files: bool,
+    pub allow_no_matches: bool,
 }
 
 pub async fn handle_paid_content_update(args: UpdatePaidContentArgs<'_>) -> Result<()> {
@@ -457,6 +469,10 @@ pub async fn handle_paid_content_update(args: UpdatePaidContentArgs<'_>) -> Resu
 
     if body.is_empty() {
         anyhow::bail!("No fields provided to update.");
+    }
+
+    if let (false, Some(patterns)) = (args.allow_no_matches, args.patterns) {
+        refuse_ungated(&api_key, args.game_id, patterns, args.all_files, "update").await?;
     }
 
     let resp = request(
@@ -555,7 +571,7 @@ pub struct ResolvePaidContentArgs<'a> {
     pub reference: Option<PaidContentRef<'a>>,
     pub all_files: bool,
     pub json_output: bool,
-    pub strict: bool,
+    pub allow_no_matches: bool,
 }
 
 pub async fn handle_paid_content_resolve(args: ResolvePaidContentArgs<'_>) -> Result<()> {
@@ -568,13 +584,7 @@ pub async fn handle_paid_content_resolve(args: ResolvePaidContentArgs<'_>) -> Re
         None => json!({ "pathPatterns": args.patterns }),
     };
 
-    let resp = request(&api_key, Method::POST, args.game_id, "/match-preview")?
-        .json(&body)
-        .send()
-        .await?;
-
-    let resp = config::check_api_response(resp).await?;
-    let report: MatchReport = resp.json().await?;
+    let report = fetch_match_report(&api_key, args.game_id, &body).await?;
 
     if args.json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -582,25 +592,66 @@ pub async fn handle_paid_content_resolve(args: ResolvePaidContentArgs<'_>) -> Re
         print!("{}", render_report(&report, args.all_files));
     }
 
-    if args.strict {
-        if report.build.is_none() {
-            anyhow::bail!(
-                "No completed build to check these patterns against. Push a build first."
-            );
-        }
+    if !args.allow_no_matches {
+        confirm_gates_files(&report)
+            .map_err(|err| anyhow::anyhow!("{err}\nPass --allow-no-matches to exit 0 anyway."))?;
+    }
 
-        if !report.zero_match_patterns.is_empty() {
-            anyhow::bail!(
-                "{} pattern(s) matched no files: {}",
-                report.zero_match_patterns.len(),
-                report
-                    .zero_match_patterns
-                    .iter()
-                    .map(|pattern| format!("\"{}\"", pattern))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
+    Ok(())
+}
+
+async fn fetch_match_report(
+    api_key: &str,
+    game_id: &str,
+    body: &serde_json::Value,
+) -> Result<MatchReport> {
+    let resp = request(api_key, Method::POST, game_id, "/match-preview")?
+        .json(body)
+        .send()
+        .await?;
+    let resp = config::check_api_response(resp).await?;
+    Ok(resp.json().await?)
+}
+
+async fn refuse_ungated(
+    api_key: &str,
+    game_id: &str,
+    patterns: &[String],
+    all_files: bool,
+    verb: &str,
+) -> Result<()> {
+    let report = fetch_match_report(api_key, game_id, &json!({ "pathPatterns": patterns })).await?;
+    if let Err(err) = confirm_gates_files(&report) {
+        print!("{}", render_report(&report, all_files));
+        return Err(ungated_error(err, verb));
+    }
+    Ok(())
+}
+
+fn ungated_error(err: anyhow::Error, verb: &str) -> anyhow::Error {
+    anyhow::anyhow!("{err}\nNothing was {verb}d. Pass --allow-no-matches to {verb} anyway.")
+}
+
+fn confirm_gates_files(report: &MatchReport) -> Result<()> {
+    if report.build.is_none() {
+        anyhow::bail!("No completed build to check these patterns against. Push a build first.");
+    }
+
+    if !report.zero_match_patterns.is_empty() {
+        anyhow::bail!(
+            "{} pattern(s) matched no files: {}",
+            report.zero_match_patterns.len(),
+            report
+                .zero_match_patterns
+                .iter()
+                .map(|pattern| format!("\"{}\"", pattern))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    if report.gated_files == 0 {
+        anyhow::bail!("These patterns gate no files, so nothing would be locked.");
     }
 
     Ok(())
@@ -678,6 +729,10 @@ mod tests {
     fn a_reference_owns_its_path_segment_and_escapes_the_identifier() {
         assert_eq!(PaidContentRef::Id("pc_1").path_segment(), "/pc_1");
         assert_eq!(
+            PaidContentRef::Id("../../other-game/paid-content/pc_1").path_segment(),
+            "/..%2F..%2Fother-game%2Fpaid-content%2Fpc_1"
+        );
+        assert_eq!(
             PaidContentRef::ContentIdentifier("full-version").path_segment(),
             "/by-identifier/full-version"
         );
@@ -689,6 +744,35 @@ mod tests {
             PaidContentRef::ContentIdentifier("../clouds").path_segment(),
             "/by-identifier/..%2Fclouds"
         );
+    }
+
+    #[test]
+    fn resolve_fails_by_default_unless_files_are_gated() {
+        let gated = report_with(4, vec![("levels/**", 4)]);
+        assert!(confirm_gates_files(&gated).is_ok());
+
+        let mut no_build = report_with(0, vec![("levels/**", 0)]);
+        no_build.build = None;
+        let err = confirm_gates_files(&no_build).unwrap_err().to_string();
+        assert!(err.contains("No completed build"), "{err}");
+
+        let mut zero_match = report_with(2, vec![("levels/**", 2), ("ghost/**", 0)]);
+        zero_match.zero_match_patterns = vec!["ghost/**".to_string()];
+        let err = confirm_gates_files(&zero_match).unwrap_err().to_string();
+        assert!(err.contains("matched no files: \"ghost/**\""), "{err}");
+
+        let no_patterns = report_with(0, vec![]);
+        let err = confirm_gates_files(&no_patterns).unwrap_err().to_string();
+        assert!(err.contains("gate no files"), "{err}");
+    }
+
+    #[test]
+    fn a_refused_write_says_nothing_landed_and_how_to_force_it() {
+        let err = ungated_error(anyhow::anyhow!("gates nothing"), "create").to_string();
+        assert!(err.contains("Nothing was created."), "{err}");
+        assert!(err.contains("--allow-no-matches to create anyway"), "{err}");
+        let err = ungated_error(anyhow::anyhow!("gates nothing"), "update").to_string();
+        assert!(err.contains("Nothing was updated."), "{err}");
     }
 
     #[test]

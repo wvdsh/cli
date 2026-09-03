@@ -23,7 +23,8 @@ fn command(args: &[&str]) -> Command {
         .env_remove("WAVEDASH_GAME_ID")
         .env_remove("WAVEDASH_UPLOAD_DIR")
         .env_remove("CI")
-        .env("HOME", env!("CARGO_TARGET_TMPDIR"));
+        .env("HOME", env!("CARGO_TARGET_TMPDIR"))
+        .env("USERPROFILE", env!("CARGO_TARGET_TMPDIR"));
     cmd
 }
 
@@ -222,11 +223,22 @@ fn resolves_positional_names_an_entry_not_a_glob() {
 }
 
 #[test]
-fn strict_advertises_that_it_needs_a_build() {
+fn allow_no_matches_is_offered_wherever_a_match_report_is_made() {
+    for sub in ["create", "update", "resolve"] {
+        let help = stdout(&run(&["paid-content", sub, "--help"]));
+        assert!(help.contains("--allow-no-matches"), "{sub}:\n{help}");
+    }
+    let help = stdout(&run(&["paid-content", "deactivate", "--help"]));
+    assert!(!help.contains("--allow-no-matches"), "{help}");
+}
+
+#[test]
+fn resolve_is_strict_by_default_and_offers_the_opt_out() {
     let help = stdout(&run(&["paid-content", "resolve", "--help"]));
+    assert!(help.contains("--allow-no-matches"), "{help}");
     assert!(
-        help.contains("confirmed to gate files"),
-        "--strict promises confirmation, not just a zero-match check:\n{help}"
+        !help.contains("--strict"),
+        "--strict was replaced by its inverse:\n{help}"
     );
 }
 
@@ -453,6 +465,7 @@ fn create_list_resolve_update_deactivate_round_trip() {
             "All twelve alpine peaks",
             "--visibility",
             "playtest",
+            "--allow-no-matches",
         ],
     );
     assert!(
@@ -484,7 +497,14 @@ fn create_list_resolve_update_deactivate_round_trip() {
     let matched = run_live(
         &token,
         &game_id,
-        &["paid-content", "resolve", "--id", id, "--show-files"],
+        &[
+            "paid-content",
+            "resolve",
+            "--id",
+            id,
+            "--all-files",
+            "--allow-no-matches",
+        ],
     );
     assert!(
         matched.status.success(),
@@ -553,6 +573,7 @@ fn resolve_reports_a_pattern_that_gates_nothing() {
             "resolve",
             "--glob",
             "definitely/not/a/real/path/*.xyz",
+            "--allow-no-matches",
         ],
     );
     assert!(out.status.success(), "match failed: {}", stderr(&out));
@@ -570,12 +591,11 @@ fn resolve_reports_a_pattern_that_gates_nothing() {
             "resolve",
             "--glob",
             "definitely/not/a/real/path/*.xyz",
-            "--strict",
         ],
     );
     assert!(
         !strict.status.success(),
-        "--strict should make a zero-match pattern fatal"
+        "a zero-match pattern is fatal unless --allow-no-matches is passed"
     );
 }
 
@@ -600,6 +620,7 @@ fn the_server_owns_the_price_range() {
             "Too expensive",
             "--feature",
             "f",
+            "--allow-no-matches",
         ],
     );
     assert!(!out.status.success());
