@@ -763,7 +763,7 @@ mod tests {
 
     #[test]
     fn a_reference_finds_its_entry_by_identifier_or_id() {
-        let entries = vec![entry("full-version", "live"), entry("bonus", "playtest")];
+        let entries = [entry("full-version", "live"), entry("bonus", "playtest")];
         let by_identifier = PaidContentRef::ContentIdentifier("bonus");
         let by_id = PaidContentRef::Id("id-full-version");
         let missing = PaidContentRef::ContentIdentifier("id-full-version");
