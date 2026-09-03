@@ -72,6 +72,53 @@ impl PaidContentRef<'_> {
     }
 }
 
+#[derive(Debug, Clone, Copy, clap::Args)]
+pub struct MatchReportOptions {
+    #[arg(
+        long = "all-files",
+        help = "List every matched path instead of the first 10",
+        help_heading = "Match report"
+    )]
+    pub all_files: bool,
+    #[arg(
+        long = "allow-no-matches",
+        help = "Succeed even when the patterns gate no files or there is no build to check against",
+        help_heading = "Match report"
+    )]
+    pub allow_no_matches: bool,
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct PatternArgs {
+    #[arg(
+        long = "pattern",
+        visible_alias = "glob",
+        value_parser = crate::parse_non_empty_arg,
+        action = clap::ArgAction::Append,
+        num_args = 1,
+        conflicts_with = "no_patterns",
+        help = "Glob for build files to lock; pass multiple times, replacing any stored list. QUOTE IT — an unquoted glob is expanded by your shell"
+    )]
+    pub pattern: Vec<String>,
+    #[arg(
+        long = "no-patterns",
+        help = "Gate no files at all; implies --allow-no-matches"
+    )]
+    pub no_patterns: bool,
+}
+
+impl PatternArgs {
+    fn requested(&self) -> Option<&[String]> {
+        if self.no_patterns {
+            Some(&[])
+        } else if self.pattern.is_empty() {
+            None
+        } else {
+            Some(&self.pattern)
+        }
+    }
+}
+
 fn request(api_key: &str, method: Method, game_id: &str, path: &str) -> Result<RequestBuilder> {
     let url = format!(
         "{}/api/games/{}/paid-content{}",
@@ -377,32 +424,31 @@ pub async fn handle_paid_content_list(game_id: &str, json_output: bool) -> Resul
 pub struct CreatePaidContentArgs<'a> {
     pub game_id: &'a str,
     pub content_identifier: &'a str,
-    pub patterns: &'a [String],
+    pub patterns: &'a PatternArgs,
     pub price_cents: i64,
     pub title: &'a str,
     pub message: Option<&'a str>,
     pub features: &'a [String],
     pub button_label: &'a str,
     pub visibility: Visibility,
-    pub all_files: bool,
-    pub allow_no_matches: bool,
+    pub report: MatchReportOptions,
 }
 
 pub async fn handle_paid_content_create(args: CreatePaidContentArgs<'_>) -> Result<()> {
     let api_key = require_api_key()?;
-    if !args.allow_no_matches {
-        refuse_ungated(
-            &api_key,
-            args.game_id,
-            args.patterns,
-            args.all_files,
-            "create",
-        )
-        .await?;
-    }
+    let patterns = args.patterns.requested().unwrap_or(&[]);
+    preflight(
+        &api_key,
+        args.game_id,
+        Some(patterns),
+        args.patterns,
+        args.report,
+        "create",
+    )
+    .await?;
     let body = json!({
         "contentIdentifier": args.content_identifier,
-        "pathPatterns": args.patterns,
+        "pathPatterns": patterns,
         "priceCents": args.price_cents,
         "title": args.title,
         "message": args.message.unwrap_or_default(),
@@ -423,29 +469,29 @@ pub async fn handle_paid_content_create(args: CreatePaidContentArgs<'_>) -> Resu
         "✓ Created paid content \"{}\" (id: {})",
         created.content_identifier, created._id
     );
-    print_report(created.match_report.as_ref(), args.all_files);
+    print_report(created.match_report.as_ref(), args.report.all_files);
     Ok(())
 }
 
 pub struct UpdatePaidContentArgs<'a> {
     pub game_id: &'a str,
     pub reference: PaidContentRef<'a>,
-    pub patterns: Option<&'a [String]>,
+    pub patterns: &'a PatternArgs,
     pub price_cents: Option<i64>,
     pub title: Option<&'a str>,
     pub message: Option<&'a str>,
     pub features: Option<&'a [String]>,
     pub button_label: Option<&'a str>,
     pub visibility: Option<Visibility>,
-    pub all_files: bool,
-    pub allow_no_matches: bool,
+    pub report: MatchReportOptions,
 }
 
 pub async fn handle_paid_content_update(args: UpdatePaidContentArgs<'_>) -> Result<()> {
     let api_key = require_api_key()?;
 
+    let patterns = args.patterns.requested();
     let mut body = serde_json::Map::new();
-    if let Some(patterns) = args.patterns {
+    if let Some(patterns) = patterns {
         body.insert("pathPatterns".into(), json!(patterns));
     }
     if let Some(price_cents) = args.price_cents {
@@ -471,9 +517,15 @@ pub async fn handle_paid_content_update(args: UpdatePaidContentArgs<'_>) -> Resu
         anyhow::bail!("No fields provided to update.");
     }
 
-    if let (false, Some(patterns)) = (args.allow_no_matches, args.patterns) {
-        refuse_ungated(&api_key, args.game_id, patterns, args.all_files, "update").await?;
-    }
+    preflight(
+        &api_key,
+        args.game_id,
+        patterns,
+        args.patterns,
+        args.report,
+        "update",
+    )
+    .await?;
 
     let resp = request(
         &api_key,
@@ -489,7 +541,7 @@ pub async fn handle_paid_content_update(args: UpdatePaidContentArgs<'_>) -> Resu
     let updated: UpdatedPaidContent = resp.json().await?;
 
     println!("✓ Updated paid content {}", args.reference.value());
-    print_report(updated.match_report.as_ref(), args.all_files);
+    print_report(updated.match_report.as_ref(), args.report.all_files);
     Ok(())
 }
 
@@ -569,9 +621,8 @@ pub struct ResolvePaidContentArgs<'a> {
     pub game_id: &'a str,
     pub patterns: &'a [String],
     pub reference: Option<PaidContentRef<'a>>,
-    pub all_files: bool,
     pub json_output: bool,
-    pub allow_no_matches: bool,
+    pub report: MatchReportOptions,
 }
 
 pub async fn handle_paid_content_resolve(args: ResolvePaidContentArgs<'_>) -> Result<()> {
@@ -589,10 +640,10 @@ pub async fn handle_paid_content_resolve(args: ResolvePaidContentArgs<'_>) -> Re
     if args.json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        print!("{}", render_report(&report, args.all_files));
+        print!("{}", render_report(&report, args.report.all_files));
     }
 
-    if !args.allow_no_matches {
+    if !args.report.allow_no_matches {
         confirm_gates_files(&report)
             .map_err(|err| anyhow::anyhow!("{err}\nPass --allow-no-matches to exit 0 anyway."))?;
     }
@@ -613,16 +664,24 @@ async fn fetch_match_report(
     Ok(resp.json().await?)
 }
 
-async fn refuse_ungated(
+async fn preflight(
     api_key: &str,
     game_id: &str,
-    patterns: &[String],
-    all_files: bool,
+    patterns: Option<&[String]>,
+    args: &PatternArgs,
+    report: MatchReportOptions,
     verb: &str,
 ) -> Result<()> {
-    let report = fetch_match_report(api_key, game_id, &json!({ "pathPatterns": patterns })).await?;
-    if let Err(err) = confirm_gates_files(&report) {
-        print!("{}", render_report(&report, all_files));
+    let Some(patterns) = patterns else {
+        return Ok(());
+    };
+    if args.no_patterns || report.allow_no_matches {
+        return Ok(());
+    }
+    let preview =
+        fetch_match_report(api_key, game_id, &json!({ "pathPatterns": patterns })).await?;
+    if let Err(err) = confirm_gates_files(&preview) {
+        print!("{}", render_report(&preview, report.all_files));
         return Err(ungated_error(err, verb));
     }
     Ok(())
@@ -764,6 +823,27 @@ mod tests {
         let no_patterns = report_with(0, vec![]);
         let err = confirm_gates_files(&no_patterns).unwrap_err().to_string();
         assert!(err.contains("gate no files"), "{err}");
+    }
+
+    #[test]
+    fn no_patterns_is_an_explicit_empty_list_and_silence_is_not() {
+        let silent = PatternArgs {
+            pattern: vec![],
+            no_patterns: false,
+        };
+        assert_eq!(silent.requested(), None);
+
+        let cleared = PatternArgs {
+            pattern: vec![],
+            no_patterns: true,
+        };
+        assert_eq!(cleared.requested(), Some(&[][..]));
+
+        let set = PatternArgs {
+            pattern: vec!["levels/**".to_string()],
+            no_patterns: false,
+        };
+        assert_eq!(set.requested().map(|p| p.len()), Some(1));
     }
 
     #[test]

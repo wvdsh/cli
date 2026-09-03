@@ -54,7 +54,7 @@ fn mask_token(token: &str) -> String {
 /// Trims and rejects through the same [`config::non_blank`] every `WAVEDASH_*`
 /// variable and the stored credentials file go through, so "blank counts as
 /// unset" has one implementation to disagree with itself from.
-fn parse_non_empty_arg(value: &str) -> Result<String, String> {
+pub(crate) fn parse_non_empty_arg(value: &str) -> Result<String, String> {
     config::non_blank(value.to_string()).ok_or_else(|| "value cannot be empty".to_string())
 }
 
@@ -528,7 +528,13 @@ enum PaidContentCommands {
     #[command(
         visible_alias = "add",
         about = "Create a paywall over build files",
-        override_usage = "wavedash paid-content create <CONTENT_IDENTIFIER> [OPTIONS]"
+        override_usage = "wavedash paid-content create <CONTENT_IDENTIFIER> [OPTIONS]",
+        group(
+            clap::ArgGroup::new("gating")
+                .required(true)
+                .multiple(true)
+                .args(["pattern", "no_patterns"])
+        )
     )]
     Create {
         #[arg(
@@ -550,14 +556,8 @@ enum PaidContentCommands {
             help = "Identifier your game passes to isEntitled (e.g. full-version)"
         )]
         content_identifier: String,
-        #[arg(
-            long = "pattern",
-            visible_alias = "glob",
-            help = "Glob for a build file to lock; pass multiple times. QUOTE IT — an unquoted glob is expanded by your shell",
-            action = clap::ArgAction::Append,
-            num_args = 1
-        )]
-        pattern: Vec<String>,
+        #[command(flatten)]
+        patterns: paid_content::PatternArgs,
         #[arg(
             long,
             value_name = "USD",
@@ -593,18 +593,8 @@ enum PaidContentCommands {
             help = "Where the content is offered (inactive is set via `deactivate`)"
         )]
         visibility: Visibility,
-        #[arg(
-            long = "all-files",
-            help = "List every matched path instead of the first 10",
-            help_heading = "Match report"
-        )]
-        all_files: bool,
-        #[arg(
-            long = "allow-no-matches",
-            help = "Create it even when the patterns gate no files or there is no build to check against",
-            help_heading = "Match report"
-        )]
-        allow_no_matches: bool,
+        #[command(flatten)]
+        report: paid_content::MatchReportOptions,
     },
     #[command(
         about = "Update paid content; only the fields you pass change",
@@ -640,14 +630,8 @@ enum PaidContentCommands {
             help = "Address the entry by its document ID instead"
         )]
         id: Option<String>,
-        #[arg(
-            long = "pattern",
-            visible_alias = "glob",
-            help = "Replaces the entire pattern list; pass multiple times. QUOTE IT",
-            action = clap::ArgAction::Append,
-            num_args = 1
-        )]
-        pattern: Vec<String>,
+        #[command(flatten)]
+        patterns: paid_content::PatternArgs,
         #[arg(
             long,
             value_name = "USD",
@@ -680,18 +664,8 @@ enum PaidContentCommands {
             help = "Where the content is offered"
         )]
         visibility: Option<Visibility>,
-        #[arg(
-            long = "all-files",
-            help = "List every matched path instead of the first 10",
-            help_heading = "Match report"
-        )]
-        all_files: bool,
-        #[arg(
-            long = "allow-no-matches",
-            help = "Apply it even when the patterns gate no files or there is no build to check against",
-            help_heading = "Match report"
-        )]
-        allow_no_matches: bool,
+        #[command(flatten)]
+        report: paid_content::MatchReportOptions,
     },
     #[command(
         visible_aliases = ["delete", "del"],
@@ -772,24 +746,16 @@ enum PaidContentCommands {
         #[arg(
             long = "pattern",
             visible_alias = "glob",
+            value_parser = parse_non_empty_arg,
             help = "Resolve an ad-hoc glob instead; pass multiple times. QUOTE IT — an unquoted glob is expanded by your shell",
             action = clap::ArgAction::Append,
             num_args = 1
         )]
         pattern: Vec<String>,
-        #[arg(
-            long = "all-files",
-            help = "List every matched path instead of the first 10",
-            help_heading = "Match report"
-        )]
-        all_files: bool,
+        #[command(flatten)]
+        report: paid_content::MatchReportOptions,
         #[arg(long, help = "Output the full report as JSON")]
         json: bool,
-        #[arg(
-            long = "allow-no-matches",
-            help = "Exit 0 even when the patterns gate no files or there is no build to check against"
-        )]
-        allow_no_matches: bool,
     },
 }
 
@@ -1141,29 +1107,27 @@ async fn run() -> Result<()> {
                 game_id,
                 config,
                 content_identifier,
-                pattern,
+                patterns,
                 price,
                 title,
                 feature,
                 message,
                 button_label,
                 visibility,
-                all_files,
-                allow_no_matches,
+                report,
             } => {
                 let game_id = resolve_game_id(game_id.as_deref(), &config)?;
                 handle_paid_content_create(CreatePaidContentArgs {
                     game_id: &game_id,
                     content_identifier: &content_identifier,
-                    patterns: &pattern,
+                    patterns: &patterns,
                     price_cents: price,
                     title: &title,
                     message: message.as_deref(),
                     features: &feature,
                     button_label: &button_label,
                     visibility,
-                    all_files,
-                    allow_no_matches,
+                    report,
                 })
                 .await?;
             }
@@ -1172,30 +1136,28 @@ async fn run() -> Result<()> {
                 config,
                 id,
                 content_identifier,
-                pattern,
+                patterns,
                 price,
                 title,
                 feature,
                 message,
                 button_label,
                 visibility,
-                all_files,
-                allow_no_matches,
+                report,
             } => {
                 let game_id = resolve_game_id(game_id.as_deref(), &config)?;
                 handle_paid_content_update(UpdatePaidContentArgs {
                     game_id: &game_id,
                     reference: paid_content_ref(id.as_deref(), content_identifier.as_deref())
                         .expect("clap requires an entry to update"),
-                    patterns: passed(&pattern),
+                    patterns: &patterns,
                     price_cents: price,
                     title: title.as_deref(),
                     message: message.as_deref(),
                     features: passed(&feature),
                     button_label: button_label.as_deref(),
                     visibility,
-                    all_files,
-                    allow_no_matches,
+                    report,
                 })
                 .await?;
             }
@@ -1217,18 +1179,16 @@ async fn run() -> Result<()> {
                 content_identifier,
                 id,
                 pattern,
-                all_files,
                 json,
-                allow_no_matches,
+                report,
             } => {
                 let game_id = resolve_game_id(game_id.as_deref(), &config)?;
                 handle_paid_content_resolve(ResolvePaidContentArgs {
                     game_id: &game_id,
                     patterns: &pattern,
                     reference: paid_content_ref(id.as_deref(), content_identifier.as_deref()),
-                    all_files,
                     json_output: json,
-                    allow_no_matches,
+                    report,
                 })
                 .await?;
             }

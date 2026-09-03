@@ -233,6 +233,76 @@ fn allow_no_matches_is_offered_wherever_a_match_report_is_made() {
 }
 
 #[test]
+fn a_blank_pattern_is_rejected_before_any_request() {
+    let cases: [&[&str]; 3] = [
+        &[
+            "paid-content",
+            "create",
+            "--game-id",
+            "g",
+            "x",
+            "--price",
+            "1",
+            "--title",
+            "t",
+            "--feature",
+            "f",
+            "--pattern",
+            "",
+        ],
+        &[
+            "paid-content",
+            "update",
+            "--game-id",
+            "g",
+            "x",
+            "--pattern",
+            "",
+        ],
+        &["paid-content", "resolve", "--game-id", "g", "--pattern", ""],
+    ];
+    for args in cases {
+        let out = run(args);
+        assert!(!out.status.success(), "{}: {}", args[1], stdout(&out));
+        assert!(
+            stderr(&out).contains("cannot be empty"),
+            "{}: {}",
+            args[1],
+            stderr(&out)
+        );
+    }
+}
+
+#[test]
+fn no_patterns_is_the_explicit_way_to_gate_nothing() {
+    for sub in ["create", "update"] {
+        let help = stdout(&run(&["paid-content", sub, "--help"]));
+        assert!(help.contains("--no-patterns"), "{sub}:\n{help}");
+    }
+    for sub in ["resolve", "deactivate", "list"] {
+        let help = stdout(&run(&["paid-content", sub, "--help"]));
+        assert!(!help.contains("--no-patterns"), "{sub}:\n{help}");
+    }
+
+    let out = run(&[
+        "paid-content",
+        "update",
+        "--game-id",
+        "g",
+        "x",
+        "--no-patterns",
+        "--pattern",
+        "levels/**",
+    ]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("cannot be used with"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
 fn resolve_is_strict_by_default_and_offers_the_opt_out() {
     let help = stdout(&run(&["paid-content", "resolve", "--help"]));
     assert!(help.contains("--allow-no-matches"), "{help}");
@@ -292,7 +362,7 @@ fn a_price_outside_the_platform_range_is_left_to_the_server() {
 }
 
 #[test]
-fn create_requires_a_feature_but_not_a_pattern() {
+fn create_requires_a_feature_and_a_gating_choice() {
     let base = [
         "paid-content",
         "create",
@@ -325,13 +395,34 @@ fn create_requires_a_feature_but_not_a_pattern() {
         .position(|a| *a == "--pattern")
         .unwrap();
     without_pattern.drain(at..at + 2);
+    let out = run(&without_pattern);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(
+        err.contains("--pattern") && err.contains("--no-patterns"),
+        "create must ask for one of the two gating flags up front: {err}"
+    );
+
+    let mut with_no_patterns = without_pattern.clone();
+    with_no_patterns.push("--no-patterns");
     let message = {
-        let out = run(&without_pattern);
+        let out = run(&with_no_patterns);
         format!("{}{}", stdout(&out), stderr(&out))
     };
     assert!(
-        !message.contains("required"),
-        "paid content that gates no files is a supported state: {message}"
+        !message.contains("required") && !message.contains("unexpected"),
+        "paid content that gates no files is a supported state via --no-patterns: {message}"
+    );
+
+    let mut twice = base.to_vec();
+    twice.extend(["--pattern", "audio/**"]);
+    let message = {
+        let out = run(&twice);
+        format!("{}{}", stdout(&out), stderr(&out))
+    };
+    assert!(
+        !message.contains("cannot be used") && !message.contains("unexpected"),
+        "repeating --pattern must still be allowed: {message}"
     );
 }
 
@@ -532,6 +623,17 @@ fn create_list_resolve_update_deactivate_round_trip() {
         updated.status.success(),
         "update with only --title should not require --visibility: {}",
         stderr(&updated)
+    );
+
+    let cleared = run_live(
+        &token,
+        &game_id,
+        &["paid-content", "update", &identifier, "--no-patterns"],
+    );
+    assert!(
+        cleared.status.success(),
+        "--no-patterns should clear the list without --allow-no-matches: {}",
+        stderr(&cleared)
     );
 
     let deactivated = run_live(
