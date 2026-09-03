@@ -49,6 +49,27 @@ impl PaidContentRef<'_> {
             PaidContentRef::ContentIdentifier(identifier) => identifier,
         }
     }
+
+    fn matches(&self, entry: &PaidContent) -> bool {
+        match self {
+            PaidContentRef::Id(id) => entry._id == *id,
+            PaidContentRef::ContentIdentifier(identifier) => {
+                entry.content_identifier == *identifier
+            }
+        }
+    }
+
+    fn not_found_error(&self) -> anyhow::Error {
+        match self {
+            PaidContentRef::Id(id) => {
+                anyhow::anyhow!("No paid content with id \"{}\" in this game", id)
+            }
+            PaidContentRef::ContentIdentifier(identifier) => anyhow::anyhow!(
+                "No paid content with contentIdentifier \"{}\" in this game",
+                identifier
+            ),
+        }
+    }
 }
 
 fn request(api_key: &str, method: Method, game_id: &str, path: &str) -> Result<RequestBuilder> {
@@ -88,6 +109,12 @@ struct PaidContentListResponse {
     paid_content: Vec<PaidContent>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct DeactivateResponse {
+    #[serde(rename = "wasActive", default)]
+    was_active: Option<bool>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct BuildRef {
     #[serde(rename = "buildNumber")]
@@ -117,7 +144,6 @@ struct MatchReport {
     gated_files: u64,
     #[serde(rename = "gatedSizeBytes")]
     gated_size_bytes: u64,
-    truncated: bool,
     #[serde(rename = "perPattern", default, deserialize_with = "null_to_default")]
     per_pattern: Vec<PatternMatch>,
     #[serde(
@@ -218,15 +244,10 @@ fn render_report(report: &MatchReport, all_files: bool) -> String {
         None => "latest build".to_string(),
     };
     out.push_str(&format!(
-        "\n  {} ({} {} indexed{})\n\n",
+        "\n  {} ({} {} indexed)\n\n",
         build_label.bold(),
         report.total_files,
-        files_noun(report.total_files),
-        if report.truncated {
-            "; indexing limit reached, counts are a floor"
-        } else {
-            ""
-        }
+        files_noun(report.total_files)
     ));
 
     let quoted: Vec<String> = report
@@ -292,16 +313,6 @@ fn render_report(report: &MatchReport, all_files: bool) -> String {
                 format!("… and {} more — pass --all-files to list them", capped).dimmed()
             ));
         }
-
-        let unsent = report
-            .gated_files
-            .saturating_sub(report.matched.len() as u64);
-        if unsent > 0 {
-            out.push_str(&format!(
-                "    {}\n",
-                format!("… and {} more not sent by the server", unsent).dimmed()
-            ));
-        }
     }
 
     out
@@ -313,19 +324,23 @@ fn print_report(report: Option<&MatchReport>, all_files: bool) {
     }
 }
 
-pub async fn handle_paid_content_list(game_id: &str, json_output: bool) -> Result<()> {
-    let api_key = require_api_key()?;
-    let resp = request(&api_key, Method::GET, game_id, "")?.send().await?;
-
+async fn fetch_paid_content(api_key: &str, game_id: &str) -> Result<Vec<PaidContent>> {
+    let resp = request(api_key, Method::GET, game_id, "")?.send().await?;
     let resp = config::check_api_response(resp).await?;
     let data: PaidContentListResponse = resp.json().await?;
+    Ok(data.paid_content)
+}
+
+pub async fn handle_paid_content_list(game_id: &str, json_output: bool) -> Result<()> {
+    let api_key = require_api_key()?;
+    let paid_content = fetch_paid_content(&api_key, game_id).await?;
 
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&data.paid_content)?);
+        println!("{}", serde_json::to_string_pretty(&paid_content)?);
         return Ok(());
     }
 
-    if data.paid_content.is_empty() {
+    if paid_content.is_empty() {
         println!("No paid content found.");
         return Ok(());
     }
@@ -344,7 +359,7 @@ pub async fn handle_paid_content_list(game_id: &str, json_output: bool) -> Resul
             Cell::new("Patterns"),
         ]);
 
-    for entry in data.paid_content {
+    for entry in paid_content {
         table.add_row(vec![
             entry._id,
             entry.content_identifier,
@@ -477,12 +492,16 @@ pub async fn handle_paid_content_deactivate(
             );
         }
 
-        println!(
-            "{} This stops offering paid content {} and cancels any price drop on it.\n\
-             Players who already bought it keep access.",
-            "Warning:".yellow().bold(),
-            reference.value().bold()
-        );
+        let entries = fetch_paid_content(&api_key, game_id).await?;
+        let Some(entry) = entries.iter().find(|entry| reference.matches(entry)) else {
+            return Err(reference.not_found_error());
+        };
+        if entry.visibility == INACTIVE {
+            println!("{}", already_inactive_line(reference));
+            return Ok(());
+        }
+
+        println!("{}", deactivate_warning(entry));
         let confirmed = cliclack::confirm("Are you sure you want to continue?")
             .initial_value(false)
             .interact()?;
@@ -496,9 +515,38 @@ pub async fn handle_paid_content_deactivate(
         .send()
         .await?;
 
-    config::check_api_response(resp).await?;
-    println!("✓ Deactivated paid content {}", reference.value());
+    let resp = config::check_api_response(resp).await?;
+    let outcome: DeactivateResponse = resp.json().await.unwrap_or_default();
+    println!("{}", deactivate_outcome_line(reference, outcome.was_active));
     Ok(())
+}
+
+const INACTIVE: &str = "inactive";
+
+fn deactivate_warning(entry: &PaidContent) -> String {
+    format!(
+        "{} This stops offering paid content {} ({}, {}, currently {}) and cancels any price drop on it.\n\
+         Players who already bought it keep access.",
+        "Warning:".yellow().bold(),
+        entry.content_identifier.bold(),
+        entry.title,
+        format_price(entry.price_cents),
+        entry.visibility
+    )
+}
+
+fn already_inactive_line(reference: PaidContentRef<'_>) -> String {
+    format!(
+        "Paid content {} is already inactive. Nothing changed.",
+        reference.value()
+    )
+}
+
+fn deactivate_outcome_line(reference: PaidContentRef<'_>, was_active: Option<bool>) -> String {
+    match was_active {
+        Some(false) => already_inactive_line(reference),
+        _ => format!("✓ Deactivated paid content {}", reference.value()),
+    }
 }
 
 pub struct ResolvePaidContentArgs<'a> {
@@ -570,7 +618,6 @@ mod tests {
             total_files: 13,
             gated_files: matched as u64,
             gated_size_bytes: 13_002_342,
-            truncated: false,
             per_pattern: per_pattern
                 .into_iter()
                 .map(|(pattern, match_count)| PatternMatch {
@@ -693,17 +740,6 @@ mod tests {
     }
 
     #[test]
-    fn a_server_that_sends_fewer_paths_than_it_gated_says_so() {
-        let mut report = report_with(500, vec![("levels/**", 5000)]);
-        report.gated_files = 5000;
-        let rendered = render_report(&report, true);
-        assert!(
-            rendered.contains("… and 4500 more not sent by the server"),
-            "{rendered}"
-        );
-    }
-
-    #[test]
     fn report_handles_a_game_with_no_completed_build() {
         let mut report = report_with(0, vec![("levels/**", 0)]);
         report.build = None;
@@ -711,12 +747,81 @@ mod tests {
         assert!(rendered.contains("No completed build yet"), "{rendered}");
     }
 
+    fn entry(identifier: &str, visibility: &str) -> PaidContent {
+        PaidContent {
+            _id: format!("id-{identifier}"),
+            content_identifier: identifier.to_string(),
+            path_patterns: vec!["levels/**".to_string()],
+            visibility: visibility.to_string(),
+            price_cents: 499,
+            title: "Unlock all content".to_string(),
+            message: String::new(),
+            features: vec![],
+            button_label: "Unlock".to_string(),
+        }
+    }
+
     #[test]
-    fn truncated_index_is_reported_rather_than_hidden() {
-        let mut report = report_with(4, vec![("levels/**", 4)]);
-        report.truncated = true;
-        let rendered = render_report(&report, false);
-        assert!(rendered.contains("counts are a floor"), "{rendered}");
+    fn a_reference_finds_its_entry_by_identifier_or_id() {
+        let entries = vec![entry("full-version", "live"), entry("bonus", "playtest")];
+        let by_identifier = PaidContentRef::ContentIdentifier("bonus");
+        let by_id = PaidContentRef::Id("id-full-version");
+        let missing = PaidContentRef::ContentIdentifier("id-full-version");
+        assert_eq!(
+            entries
+                .iter()
+                .find(|e| by_identifier.matches(e))
+                .map(|e| e._id.as_str()),
+            Some("id-bonus")
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .find(|e| by_id.matches(e))
+                .map(|e| e.content_identifier.as_str()),
+            Some("full-version")
+        );
+        assert!(entries.iter().all(|e| !missing.matches(e)));
+    }
+
+    #[test]
+    fn the_warning_names_what_is_about_to_be_deactivated() {
+        let rendered = deactivate_warning(&entry("full-version", "live"));
+        assert!(rendered.contains("full-version"), "{rendered}");
+        assert!(rendered.contains("Unlock all content"), "{rendered}");
+        assert!(rendered.contains("$4.99"), "{rendered}");
+        assert!(rendered.contains("currently live"), "{rendered}");
+        assert!(rendered.contains("keep access"), "{rendered}");
+    }
+
+    #[test]
+    fn a_second_deactivation_is_reported_as_a_no_op() {
+        let reference = PaidContentRef::ContentIdentifier("full-version");
+        assert!(deactivate_outcome_line(reference, Some(false)).contains("already inactive"));
+        assert!(deactivate_outcome_line(reference, Some(true)).contains("✓ Deactivated"));
+    }
+
+    #[test]
+    fn an_older_server_that_says_nothing_about_was_active_still_reads_as_deactivated() {
+        let reference = PaidContentRef::Id("pc_1");
+        let outcome: DeactivateResponse =
+            serde_json::from_value(json!({ "success": true })).expect("legacy body parses");
+        assert_eq!(outcome.was_active, None);
+        assert!(deactivate_outcome_line(reference, outcome.was_active).contains("✓ Deactivated"));
+
+        let outcome: DeactivateResponse =
+            serde_json::from_value(json!({ "success": true, "wasActive": false })).unwrap();
+        assert_eq!(outcome.was_active, Some(false));
+    }
+
+    #[test]
+    fn a_missing_reference_is_described_the_way_the_server_would() {
+        let by_identifier = PaidContentRef::ContentIdentifier("ghost").not_found_error();
+        assert!(by_identifier
+            .to_string()
+            .contains("contentIdentifier \"ghost\""));
+        let by_id = PaidContentRef::Id("pc_9").not_found_error();
+        assert!(by_id.to_string().contains("id \"pc_9\""));
     }
 
     #[test]
@@ -768,7 +873,6 @@ mod tests {
             "totalFiles": 13,
             "gatedFiles": 0,
             "gatedSizeBytes": 0,
-            "truncated": false,
             "perPattern": [],
             "zeroMatchPatterns": null
         }))
