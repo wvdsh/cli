@@ -142,8 +142,11 @@ async fn notify_upload_complete(
 #[derive(Debug, Deserialize)]
 struct BuildStatusResponse {
     status: String,
-    #[serde(rename = "processingError")]
-    processing_error: Option<String>,
+    #[serde(rename = "failure")]
+    failure: Option<String>,
+    #[allow(dead_code)]
+    #[serde(rename = "failureCode")]
+    failure_code: Option<String>,
 }
 
 async fn get_build_status(
@@ -202,9 +205,9 @@ async fn poll_until_processed(game_id: &str, build_id: &str, api_key: &str) -> R
                 consecutive_failures = 0;
                 match build.status.as_str() {
                     "COMPLETED" => return Ok(()),
-                    "FAILED" => match build.processing_error {
-                        Some(message) => anyhow::bail!("Build processing failed: {}", message),
-                        None => anyhow::bail!("Build processing failed."),
+                    "FAILED" => match build.failure {
+                        Some(message) => anyhow::bail!("{}", message),
+                        None => anyhow::bail!("Build failed."),
                     },
                     "CANCELLED" => {
                         anyhow::bail!("Build was cancelled before processing finished.")
