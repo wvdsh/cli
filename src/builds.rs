@@ -2,7 +2,9 @@ use crate::auth::AuthManager;
 use crate::config::{self, UploadSource, WavedashConfig};
 use crate::file_staging::FileStaging;
 use anyhow::Result;
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration, Instant};
 #[path = "uploader.rs"]
@@ -164,6 +166,29 @@ async fn get_build_status(
 }
 
 async fn wait_for_build_processing(game_id: &str, build_id: &str, api_key: &str) -> Result<()> {
+    let spinner = if std::io::stderr().is_terminal() {
+        let pb = ProgressBar::new_spinner();
+        pb.set_style(ProgressStyle::with_template("{spinner:.cyan} {msg}").unwrap());
+        pb.set_message("Processing build...");
+        pb.enable_steady_tick(Duration::from_millis(100));
+        Some(pb)
+    } else {
+        println!("Processing build...");
+        None
+    };
+
+    let outcome = poll_until_processed(game_id, build_id, api_key).await;
+
+    match (&spinner, &outcome) {
+        (Some(pb), Ok(())) => pb.finish_with_message("✓ Build processed successfully!"),
+        (Some(pb), Err(_)) => pb.finish_and_clear(),
+        (None, Ok(())) => println!("Build processed successfully."),
+        (None, Err(_)) => {}
+    }
+    outcome
+}
+
+async fn poll_until_processed(game_id: &str, build_id: &str, api_key: &str) -> Result<()> {
     let client = config::create_http_client()?;
     let deadline = Instant::now() + BUILD_PROCESSING_TIMEOUT;
 
@@ -194,6 +219,7 @@ pub async fn handle_build_push(
     verbose: bool,
     message: Option<String>,
     upload_source: UploadSource,
+    no_wait: bool,
 ) -> Result<()> {
     // Load wavedash.toml config
     let wavedash_config = WavedashConfig::load(&config_path)?;
@@ -263,8 +289,10 @@ pub async fn handle_build_push(
         notify_upload_complete(wavedash_config.game_id()?, &creds.game_build_id, &api_key).await?;
 
     println!("\nBuild ID: {}", creds.game_build_id);
-    println!("Processing build...");
-    wait_for_build_processing(wavedash_config.game_id()?, &creds.game_build_id, &api_key).await?;
+    if !no_wait {
+        wait_for_build_processing(wavedash_config.game_id()?, &creds.game_build_id, &api_key)
+            .await?;
+    }
 
     let site_host = config::get("open_browser_website_host")?;
     let play_url = format!("{}/playtest/{}/{}", site_host, result.game_slug, creds.uuid);
