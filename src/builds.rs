@@ -13,7 +13,9 @@ mod uploader;
 use uploader::{scan_directory, R2Config, R2Uploader};
 
 const BUILD_STATUS_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const BUILD_STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const BUILD_PROCESSING_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const MAX_CONSECUTIVE_STATUS_FAILURES: u32 = 3;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct R2Credentials {
@@ -156,6 +158,7 @@ async fn get_build_status(
     let response = client
         .get(&url)
         .header("Authorization", format!("Bearer {}", api_key))
+        .timeout(BUILD_STATUS_REQUEST_TIMEOUT)
         .send()
         .await?;
 
@@ -191,22 +194,37 @@ async fn wait_for_build_processing(game_id: &str, build_id: &str, api_key: &str)
 async fn poll_until_processed(game_id: &str, build_id: &str, api_key: &str) -> Result<()> {
     let client = config::create_http_client()?;
     let deadline = Instant::now() + BUILD_PROCESSING_TIMEOUT;
+    let mut consecutive_failures = 0;
 
     loop {
-        let build = get_build_status(&client, game_id, build_id, api_key).await?;
-        match build.status.as_str() {
-            "COMPLETED" => return Ok(()),
-            "FAILED" => match build.processing_error {
-                Some(message) => anyhow::bail!("Build processing failed: {}", message),
-                None => anyhow::bail!("Build processing failed."),
-            },
-            "CANCELLED" => anyhow::bail!("Build was cancelled before processing finished."),
-            _ => {}
+        match get_build_status(&client, game_id, build_id, api_key).await {
+            Ok(build) => {
+                consecutive_failures = 0;
+                match build.status.as_str() {
+                    "COMPLETED" => return Ok(()),
+                    "FAILED" => match build.processing_error {
+                        Some(message) => anyhow::bail!("Build processing failed: {}", message),
+                        None => anyhow::bail!("Build processing failed."),
+                    },
+                    "CANCELLED" => {
+                        anyhow::bail!("Build was cancelled before processing finished.")
+                    }
+                    _ => {}
+                }
+            }
+            Err(error) => {
+                consecutive_failures += 1;
+                if consecutive_failures >= MAX_CONSECUTIVE_STATUS_FAILURES {
+                    return Err(error.context(
+                        "Could not check the build's processing status. The play link above will load the game once it finishes.",
+                    ));
+                }
+            }
         }
 
         if Instant::now() >= deadline {
             anyhow::bail!(
-                "Build is still processing after {} minutes. Check its status in the dev portal.",
+                "Build is still processing after {} minutes. The play link above will load the game once it finishes.",
                 BUILD_PROCESSING_TIMEOUT.as_secs() / 60
             );
         }
@@ -288,15 +306,15 @@ pub async fn handle_build_push(
     let result =
         notify_upload_complete(wavedash_config.game_id()?, &creds.game_build_id, &api_key).await?;
 
+    let site_host = config::get("open_browser_website_host")?;
+    let play_url = format!("{}/playtest/{}/{}", site_host, result.game_slug, creds.uuid);
     println!("\nBuild ID: {}", creds.game_build_id);
+    println!("▶ Play at: {}", play_url);
+
     if !no_wait {
         wait_for_build_processing(wavedash_config.game_id()?, &creds.game_build_id, &api_key)
             .await?;
     }
-
-    let site_host = config::get("open_browser_website_host")?;
-    let play_url = format!("{}/playtest/{}/{}", site_host, result.game_slug, creds.uuid);
-    println!("▶ Play at: {}", play_url);
 
     Ok(())
 }
