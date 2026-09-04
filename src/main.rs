@@ -565,7 +565,7 @@ enum PaidContentCommands {
             help = "Price in USD, e.g. 4.99"
         )]
         price: i64,
-        #[arg(long, help = "Paywall modal headline")]
+        #[arg(long, value_parser = parse_non_empty_arg, help = "Paywall modal headline")]
         title: String,
         #[arg(
             long = "feature",
