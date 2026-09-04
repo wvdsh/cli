@@ -5,7 +5,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 #[path = "uploader.rs"]
-mod uploader;
+pub(crate) mod uploader;
 
 use uploader::{scan_directory, R2Config, R2Uploader};
 

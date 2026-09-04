@@ -152,7 +152,8 @@ pub async fn check_api_response(response: reqwest::Response) -> Result<reqwest::
         if let Some(msg) = parsed["error"].as_str() {
             let code = parsed["code"].as_str();
             match (status, msg, code) {
-                (404, _, _) | (_, "Game not found", _) => {
+                // On the message, not the status — other 404s aren't a bad game_id.
+                (_, "Game not found", _) => {
                     anyhow::bail!(
                         "Game not found. The game_id in your wavedash.toml may be incorrect.\nRun `wavedash init` to reconfigure."
                     );
