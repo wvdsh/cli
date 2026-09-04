@@ -570,6 +570,7 @@ enum PaidContentCommands {
         #[arg(
             long = "feature",
             visible_alias = "feat",
+            value_parser = parse_non_empty_arg,
             help = "Feature bullet; pass multiple times",
             action = clap::ArgAction::Append,
             num_args = 1,
@@ -581,6 +582,7 @@ enum PaidContentCommands {
         #[arg(
             long = "button-label",
             visible_alias = "btn",
+            value_parser = parse_non_empty_arg,
             help = "Purchase button label",
             default_value = "Unlock"
         )]
@@ -644,6 +646,7 @@ enum PaidContentCommands {
         #[arg(
             long = "feature",
             visible_alias = "feat",
+            value_parser = parse_non_empty_arg,
             help = "Replaces the entire feature list; pass multiple times",
             action = clap::ArgAction::Append,
             num_args = 1
@@ -654,6 +657,7 @@ enum PaidContentCommands {
         #[arg(
             long = "button-label",
             visible_alias = "btn",
+            value_parser = parse_non_empty_arg,
             help = "New purchase button label"
         )]
         button_label: Option<String>,

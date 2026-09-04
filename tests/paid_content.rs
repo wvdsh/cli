@@ -274,6 +274,60 @@ fn a_blank_pattern_is_rejected_before_any_request() {
 }
 
 #[test]
+fn blank_copy_is_rejected_client_side_but_a_blank_message_clears() {
+    let create = [
+        "paid-content",
+        "create",
+        "--game-id",
+        "g",
+        "x",
+        "--pattern",
+        "levels/**",
+        "--price",
+        "1",
+        "--title",
+        "t",
+        "--feature",
+        "f",
+    ];
+    for flag in ["--title", "--feature", "--button-label"] {
+        let mut args = create.to_vec();
+        match args.iter().position(|a| *a == flag) {
+            Some(at) => args[at + 1] = "",
+            None => args.extend([flag, ""]),
+        }
+        let out = run(&args);
+        assert!(
+            stderr(&out).contains("cannot be empty"),
+            "create {flag}: {}",
+            stderr(&out)
+        );
+
+        let out = run(&["paid-content", "update", "--game-id", "g", "x", flag, ""]);
+        assert!(
+            stderr(&out).contains("cannot be empty"),
+            "update {flag}: {}",
+            stderr(&out)
+        );
+    }
+
+    let out = run(&[
+        "paid-content",
+        "update",
+        "--game-id",
+        "g",
+        "x",
+        "--message",
+        "",
+    ]);
+    assert!(
+        !stderr(&out).contains("cannot be empty"),
+        "a blank --message is how the body copy is cleared: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
 fn no_patterns_is_the_explicit_way_to_gate_nothing() {
     for sub in ["create", "update"] {
         let help = stdout(&run(&["paid-content", sub, "--help"]));
