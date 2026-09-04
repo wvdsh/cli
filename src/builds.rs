@@ -2,12 +2,20 @@ use crate::auth::AuthManager;
 use crate::config::{self, UploadSource, WavedashConfig};
 use crate::file_staging::FileStaging;
 use anyhow::Result;
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
+use std::io::IsTerminal;
 use std::path::PathBuf;
+use tokio::time::{sleep, Duration, Instant};
 #[path = "uploader.rs"]
 mod uploader;
 
 use uploader::{scan_directory, R2Config, R2Uploader};
+
+const BUILD_STATUS_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const BUILD_STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const BUILD_PROCESSING_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const MAX_CONSECUTIVE_STATUS_FAILURES: u32 = 3;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct R2Credentials {
@@ -131,11 +139,108 @@ async fn notify_upload_complete(
     Ok(result)
 }
 
+#[derive(Debug, Deserialize)]
+struct BuildStatusResponse {
+    status: String,
+    #[serde(rename = "failure")]
+    failure: Option<String>,
+    #[allow(dead_code)]
+    #[serde(rename = "failureCode")]
+    failure_code: Option<String>,
+}
+
+async fn get_build_status(
+    client: &reqwest::Client,
+    game_id: &str,
+    build_id: &str,
+    api_key: &str,
+) -> Result<BuildStatusResponse> {
+    let api_host = config::get("api_host")?;
+    let url = format!("{}/api/games/{}/builds/{}", api_host, game_id, build_id);
+
+    let response = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .timeout(BUILD_STATUS_REQUEST_TIMEOUT)
+        .send()
+        .await?;
+
+    let response = config::check_api_response(response).await?;
+
+    let result: BuildStatusResponse = response.json().await?;
+    Ok(result)
+}
+
+async fn wait_for_build_processing(game_id: &str, build_id: &str, api_key: &str) -> Result<()> {
+    let spinner = if std::io::stderr().is_terminal() {
+        let pb = ProgressBar::new_spinner();
+        pb.set_style(ProgressStyle::with_template("{spinner:.cyan} {msg}").unwrap());
+        pb.set_message("Processing build...");
+        pb.enable_steady_tick(Duration::from_millis(100));
+        Some(pb)
+    } else {
+        println!("Processing build...");
+        None
+    };
+
+    let outcome = poll_until_processed(game_id, build_id, api_key).await;
+
+    match (&spinner, &outcome) {
+        (Some(pb), Ok(())) => pb.finish_with_message("✓ Build processed successfully!"),
+        (Some(pb), Err(_)) => pb.finish_and_clear(),
+        (None, Ok(())) => println!("Build processed successfully."),
+        (None, Err(_)) => {}
+    }
+    outcome
+}
+
+async fn poll_until_processed(game_id: &str, build_id: &str, api_key: &str) -> Result<()> {
+    let client = config::create_http_client()?;
+    let deadline = Instant::now() + BUILD_PROCESSING_TIMEOUT;
+    let mut consecutive_failures = 0;
+
+    loop {
+        match get_build_status(&client, game_id, build_id, api_key).await {
+            Ok(build) => {
+                consecutive_failures = 0;
+                match build.status.as_str() {
+                    "COMPLETED" => return Ok(()),
+                    "FAILED" => match build.failure {
+                        Some(message) => anyhow::bail!("{}", message),
+                        None => anyhow::bail!("Build failed."),
+                    },
+                    "CANCELLED" => {
+                        anyhow::bail!("Build was cancelled before processing finished.")
+                    }
+                    _ => {}
+                }
+            }
+            Err(error) => {
+                consecutive_failures += 1;
+                if consecutive_failures >= MAX_CONSECUTIVE_STATUS_FAILURES {
+                    return Err(error.context(
+                        "Could not check the build's processing status. The play link above will load the game once it finishes.",
+                    ));
+                }
+            }
+        }
+
+        if Instant::now() >= deadline {
+            anyhow::bail!(
+                "Build is still processing after {} minutes. The play link above will load the game once it finishes.",
+                BUILD_PROCESSING_TIMEOUT.as_secs() / 60
+            );
+        }
+        sleep(BUILD_STATUS_POLL_INTERVAL).await;
+    }
+}
+
 pub async fn handle_build_push(
     config_path: PathBuf,
     verbose: bool,
     message: Option<String>,
     upload_source: UploadSource,
+    no_wait: bool,
 ) -> Result<()> {
     // Load wavedash.toml config
     let wavedash_config = WavedashConfig::load(&config_path)?;
@@ -204,11 +309,15 @@ pub async fn handle_build_push(
     let result =
         notify_upload_complete(wavedash_config.game_id()?, &creds.game_build_id, &api_key).await?;
 
-    // Print the play URL
     let site_host = config::get("open_browser_website_host")?;
     let play_url = format!("{}/playtest/{}/{}", site_host, result.game_slug, creds.uuid);
     println!("\nBuild ID: {}", creds.game_build_id);
     println!("▶ Play at: {}", play_url);
+
+    if !no_wait {
+        wait_for_build_processing(wavedash_config.game_id()?, &creds.game_build_id, &api_key)
+            .await?;
+    }
 
     Ok(())
 }
