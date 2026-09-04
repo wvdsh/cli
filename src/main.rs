@@ -639,7 +639,7 @@ enum PaidContentCommands {
             help = "New price in USD"
         )]
         price: Option<i64>,
-        #[arg(long, help = "New modal headline")]
+        #[arg(long, value_parser = parse_non_empty_arg, help = "New modal headline")]
         title: Option<String>,
         #[arg(
             long = "feature",
