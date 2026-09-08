@@ -312,7 +312,7 @@ pub async fn handle_build_push(
     let site_host = config::get("open_browser_website_host")?;
     let play_url = format!("{}/playtest/{}/{}", site_host, result.game_slug, creds.uuid);
     println!("\nBuild ID: {}", creds.game_build_id);
-    println!("▶ Play at: {}", play_url);
+    println!("▶ View at: {}", play_url);
 
     if !no_wait {
         wait_for_build_processing(wavedash_config.game_id()?, &creds.game_build_id, &api_key)
