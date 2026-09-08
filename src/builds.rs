@@ -42,7 +42,6 @@ struct BuildUploadInfo<'a> {
     entrypoint: Option<&'a str>,
     entrypoint_params: Option<serde_json::Value>,
     message: Option<&'a str>,
-    build_size_bytes: u64,
     upload_source: UploadSource,
 }
 
@@ -59,7 +58,6 @@ async fn get_temp_credentials(
     );
 
     let mut request_body = serde_json::json!({
-        "buildSizeBytes": info.build_size_bytes,
         "uploadSource": info.upload_source.as_label(),
     });
 
@@ -179,7 +177,6 @@ pub async fn handle_build_push(
             entrypoint: wavedash_config.entrypoint()?,
             entrypoint_params: wavedash_config.executable_entrypoint_params()?,
             message: message.as_deref(),
-            build_size_bytes: total_bytes,
             upload_source,
         },
         &api_key,
