@@ -273,6 +273,11 @@ enum BuildCommands {
             help = "Attribute the build to the tool running the CLI instead of the CLI itself"
         )]
         upload_source: Option<UploadSource>,
+        #[arg(
+            long = "no-wait",
+            help = "Exit as soon as the upload finishes instead of waiting for the build to process"
+        )]
+        no_wait: bool,
     },
 }
 
@@ -638,12 +643,14 @@ async fn run() -> Result<()> {
                 config,
                 message,
                 upload_source,
+                no_wait,
             } => {
                 handle_build_push(
                     config,
                     cli.verbose,
                     message,
                     upload_source.unwrap_or_default(),
+                    no_wait,
                 )
                 .await?;
             }
@@ -937,6 +944,23 @@ mod tests {
             }
             _ => panic!("parsed the wrong command"),
         }
+    }
+
+    #[test]
+    fn no_wait_is_off_unless_passed() {
+        fn push_no_wait(argv: &[&str]) -> bool {
+            let parsed = Cli::try_parse_from(argv).expect("should parse");
+            let Some(Commands::Build {
+                action: BuildCommands::Push { no_wait, .. },
+            }) = parsed.command
+            else {
+                panic!("`{:?}` did not parse as `build push`", argv);
+            };
+            no_wait
+        }
+
+        assert!(!push_no_wait(&["wavedash", "build", "push"]));
+        assert!(push_no_wait(&["wavedash", "build", "push", "--no-wait"]));
     }
 
     #[test]
