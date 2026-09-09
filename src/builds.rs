@@ -2,12 +2,13 @@ use crate::auth::AuthManager;
 use crate::config::{self, UploadSource, WavedashConfig};
 use crate::file_staging::FileStaging;
 use anyhow::Result;
+use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 #[path = "uploader.rs"]
 mod uploader;
 
-use uploader::{scan_directory, R2Config, R2Uploader};
+use uploader::{format_bytes, relative_key, scan_directory, R2Config, R2Uploader, ScannedFile};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct R2Credentials {
@@ -131,11 +132,108 @@ async fn notify_upload_complete(
     Ok(result)
 }
 
+#[derive(Debug, Deserialize)]
+struct DuplicateFileEntry {
+    path: String,
+    size: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct DuplicateFileGroup {
+    files: Vec<DuplicateFileEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DuplicateFilesReport {
+    groups: Vec<DuplicateFileGroup>,
+    #[serde(rename = "savingsBytes")]
+    savings_bytes: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct BuildCheckResponse {
+    #[serde(rename = "duplicateFiles")]
+    duplicate_files: Option<DuplicateFilesReport>,
+}
+
+async fn check_build(
+    game_id: &str,
+    scanned_files: &[ScannedFile],
+    api_key: &str,
+) -> Result<BuildCheckResponse> {
+    let client = config::create_http_client()?;
+    let api_host = config::get("api_host")?;
+    let url = format!("{}/api/games/{}/builds/check", api_host, game_id);
+
+    let files: Vec<serde_json::Value> = scanned_files
+        .iter()
+        .map(|f| serde_json::json!({ "path": relative_key(&f.relative_path), "size": f.size }))
+        .collect();
+
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "files": files }))
+        .send()
+        .await?;
+
+    let response = config::check_api_response(response).await?;
+    Ok(response.json().await?)
+}
+
+fn print_duplicate_files_warning(report: &DuplicateFilesReport) {
+    println!(
+        "{} Potential duplicate files detected, removing duplicates could save {}",
+        "Warning:".yellow().bold(),
+        format_bytes(report.savings_bytes).bold()
+    );
+    println!("List of files:");
+    for (index, group) in report.groups.iter().enumerate() {
+        if index > 0 {
+            println!();
+        }
+        for file in &group.files {
+            println!("  {}  {}", file.path, format_bytes(file.size).dimmed());
+        }
+    }
+}
+
+async fn confirm_duplicate_files(
+    game_id: &str,
+    scanned_files: &[ScannedFile],
+    api_key: &str,
+    force: bool,
+) -> Result<bool> {
+    let check = check_build(game_id, scanned_files, api_key).await?;
+    let Some(report) = check.duplicate_files else {
+        return Ok(true);
+    };
+
+    print_duplicate_files_warning(&report);
+    println!();
+
+    if force {
+        println!("Pushing anyway because --force was passed.");
+        return Ok(true);
+    }
+    if crate::is_non_interactive() {
+        anyhow::bail!(
+            "Refusing to push a build with potential duplicate files without confirmation.\n\
+             Remove the duplicates, or re-run with --force to push anyway."
+        );
+    }
+    Ok(cliclack::confirm("Push anyway?")
+        .initial_value(false)
+        .interact()?)
+}
+
 pub async fn handle_build_push(
     config_path: PathBuf,
     verbose: bool,
     message: Option<String>,
     upload_source: UploadSource,
+    force: bool,
 ) -> Result<()> {
     // Load wavedash.toml config
     let wavedash_config = WavedashConfig::load(&config_path)?;
@@ -167,6 +265,13 @@ pub async fn handle_build_push(
     let (scanned_files, total_bytes) = scan_directory(&upload_dir)?;
     if scanned_files.is_empty() {
         anyhow::bail!("No files found in {}", upload_dir.display());
+    }
+
+    let confirmed =
+        confirm_duplicate_files(wavedash_config.game_id()?, &scanned_files, &api_key, force).await?;
+    if !confirmed {
+        println!("Aborted. Nothing was uploaded.");
+        return Ok(());
     }
 
     // Get temporary R2 credentials (includes build size)

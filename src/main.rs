@@ -273,6 +273,12 @@ enum BuildCommands {
             help = "Attribute the build to the tool running the CLI instead of the CLI itself"
         )]
         upload_source: Option<UploadSource>,
+        #[arg(
+            long = "force",
+            short = 'f',
+            help = "Push even when a check like the duplicate file warning would otherwise stop and ask"
+        )]
+        force: bool,
     },
 }
 
@@ -638,12 +644,14 @@ async fn run() -> Result<()> {
                 config,
                 message,
                 upload_source,
+                force,
             } => {
                 handle_build_push(
                     config,
                     cli.verbose,
                     message,
                     upload_source.unwrap_or_default(),
+                    force,
                 )
                 .await?;
             }

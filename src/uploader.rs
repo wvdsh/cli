@@ -28,6 +28,7 @@ pub struct R2Config {
 pub struct ScannedFile {
     pub local_path: PathBuf,
     pub relative_path: PathBuf,
+    pub size: u64,
 }
 
 #[derive(Debug)]
@@ -218,6 +219,7 @@ pub fn scan_directory(source_dir: &Path) -> Result<(Vec<ScannedFile>, u64)> {
         files.push(ScannedFile {
             local_path: path,
             relative_path: relative,
+            size: file_size,
         });
         total_bytes = total_bytes.saturating_add(file_size);
     }
@@ -235,12 +237,16 @@ fn build_manifest_from_scan(scanned_files: &[ScannedFile], prefix: &str) -> Vec<
         .collect()
 }
 
-fn build_object_key(prefix: &str, relative: &Path) -> String {
-    let relative_key = relative
+pub fn relative_key(relative: &Path) -> String {
+    relative
         .components()
         .map(|comp| comp.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
-        .join("/");
+        .join("/")
+}
+
+fn build_object_key(prefix: &str, relative: &Path) -> String {
+    let relative_key = relative_key(relative);
 
     if prefix.is_empty() {
         relative_key
@@ -298,7 +304,7 @@ async fn upload_file(
     Ok(())
 }
 
-fn format_bytes(bytes: u64) -> String {
+pub fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     if bytes == 0 {
         return "0 B".to_string();
