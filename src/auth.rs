@@ -25,7 +25,8 @@ struct Credentials {
     api_key: String,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum AuthSource {
     Environment,
     File,

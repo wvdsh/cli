@@ -28,6 +28,7 @@ use init::{
     handle_init, handle_project_create, handle_project_list, handle_team_create, handle_team_list,
 };
 use publish::{handle_publish, PublishArgs};
+use serde::Serialize;
 use stats::{handle_stat_create, handle_stat_delete, handle_stat_update};
 use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
@@ -40,8 +41,17 @@ fn mask_token(token: &str) -> String {
     }
 }
 
-async fn handle_auth_status(auth_info: AuthInfo) -> Result<()> {
-    let (api_key, via, fix) = match (auth_info.source, auth_info.api_key) {
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthStatus {
+    source: AuthSource,
+    username: String,
+    email: String,
+    api_key: String,
+}
+
+async fn handle_auth_status(auth_info: AuthInfo, json: bool) -> Result<()> {
+    let (api_key, via, fix) = match (&auth_info.source, auth_info.api_key) {
         (AuthSource::Environment, Some(api_key)) => (
             api_key,
             "via WAVEDASH_TOKEN environment variable",
@@ -58,10 +68,20 @@ async fn handle_auth_status(auth_info: AuthInfo) -> Result<()> {
 
     match verify_api_key(&api_key).await {
         Ok(Verification::Valid(identity)) => {
-            println!("✓ Authenticated ({via})");
-            println!("Username: {}", identity.username);
-            println!("Email: {}", identity.email);
-            println!("API Key: {masked}");
+            if json {
+                let status = AuthStatus {
+                    source: auth_info.source,
+                    username: identity.username,
+                    email: identity.email,
+                    api_key: masked,
+                };
+                println!("{}", serde_json::to_string_pretty(&status)?);
+            } else {
+                println!("✓ Authenticated ({via})");
+                println!("Username: {}", identity.username);
+                println!("Email: {}", identity.email);
+                println!("API Key: {masked}");
+            }
             Ok(())
         }
         Ok(Verification::Rejected) => anyhow::bail!(
@@ -284,7 +304,10 @@ enum AuthCommands {
         token_stdin: bool,
     },
     Logout,
-    Status,
+    Status {
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -639,7 +662,9 @@ async fn run() -> Result<()> {
                         None => println!("✓ Successfully logged out"),
                     }
                 }
-                AuthCommands::Status => handle_auth_status(auth_manager.get_auth_info()).await?,
+                AuthCommands::Status { json } => {
+                    handle_auth_status(auth_manager.get_auth_info(), json).await?
+                }
             }
         }
         Commands::Build { action } => match action {
@@ -946,6 +971,34 @@ mod tests {
             }
             _ => panic!("parsed the wrong command"),
         }
+    }
+
+    #[test]
+    fn auth_status_accepts_json_output() {
+        let cli = Cli::try_parse_from(["wavedash", "auth", "status", "--json"])
+            .expect("auth status should be a valid command");
+
+        match cli.command {
+            Some(Commands::Auth {
+                action: AuthCommands::Status { json },
+            }) => assert!(json),
+            _ => panic!("parsed the wrong command"),
+        }
+    }
+
+    #[test]
+    fn auth_status_json_uses_camel_case_and_lowercase_source() {
+        let status = AuthStatus {
+            source: AuthSource::Environment,
+            username: "walten".into(),
+            email: "walten@wavedash.com".into(),
+            api_key: "wd_455...f62".into(),
+        };
+
+        let value = serde_json::to_value(status).expect("status should serialize");
+        assert_eq!(value["source"], "environment");
+        assert_eq!(value["apiKey"], "wd_455...f62");
+        assert!(value.get("api_key").is_none());
     }
 
     #[test]
