@@ -52,10 +52,7 @@ async fn handle_auth_status(auth_info: AuthInfo) -> Result<()> {
             "via stored credentials",
             "Run `wavedash auth login` to re-authenticate.",
         ),
-        _ => {
-            println!("Not authenticated. Run 'wavedash auth login' or set WAVEDASH_TOKEN environment variable.");
-            return Ok(());
-        }
+        _ => anyhow::bail!("Not authenticated. Run `wavedash auth login` or set WAVEDASH_TOKEN."),
     };
     let masked = mask_token(&api_key);
 
