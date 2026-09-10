@@ -17,7 +17,7 @@ use achievements::{
     handle_achievement_update, CreateAchievementArgs, UpdateAchievementArgs,
 };
 use anyhow::Result;
-use auth::{login_with_browser, AuthManager, AuthSource};
+use auth::{login_with_browser, verify_api_key, AuthInfo, AuthManager, AuthSource, Verification};
 use builds::handle_build_push;
 use clap::{Parser, Subcommand};
 use clear_playtest_data::{handle_clear_playtest_data, ClearPlaytestDataArgs};
@@ -37,6 +37,75 @@ fn mask_token(token: &str) -> String {
         format!("{}...{}", &token[..6], &token[token.len() - 3..])
     } else {
         "***".to_string()
+    }
+}
+
+fn auth_failure(json: bool, source: &AuthSource, reason: &str, message: String) -> anyhow::Error {
+    if json {
+        let verdict = serde_json::json!({
+            "authenticated": false,
+            "source": source,
+            "reason": reason,
+            "message": message,
+        });
+        println!("{verdict:#}");
+    }
+    anyhow::anyhow!(message)
+}
+
+async fn handle_auth_status(auth_info: AuthInfo, json: bool) -> Result<()> {
+    let (api_key, via, fix) = match (&auth_info.source, auth_info.api_key) {
+        (AuthSource::Environment, Some(api_key)) => (
+            api_key,
+            "via WAVEDASH_TOKEN environment variable",
+            "Unset WAVEDASH_TOKEN or set it to a valid key.",
+        ),
+        (AuthSource::File, Some(api_key)) => (
+            api_key,
+            "via stored credentials",
+            "Run `wavedash auth login` to re-authenticate.",
+        ),
+        _ => {
+            return Err(auth_failure(
+                json,
+                &auth_info.source,
+                "not_authenticated",
+                "Not authenticated. Run `wavedash auth login` or set WAVEDASH_TOKEN.".into(),
+            ))
+        }
+    };
+    let masked = mask_token(&api_key);
+
+    match verify_api_key(&api_key).await {
+        Ok(Verification::Valid(identity)) => {
+            if json {
+                let verdict = serde_json::json!({
+                    "authenticated": true,
+                    "source": auth_info.source,
+                    "username": identity.username,
+                    "email": identity.email,
+                });
+                println!("{verdict:#}");
+            } else {
+                println!("✓ Authenticated ({via})");
+                println!("Username: {}", identity.username);
+                println!("Email: {}", identity.email);
+                println!("API Key: {masked}");
+            }
+            Ok(())
+        }
+        Ok(Verification::Rejected) => Err(auth_failure(
+            json,
+            &auth_info.source,
+            "rejected",
+            format!("The API key ({via}) was rejected by the server. It may have been revoked, or the account may no longer be active.\nAPI Key: {masked}\n{fix}"),
+        )),
+        Err(e) => Err(auth_failure(
+            json,
+            &auth_info.source,
+            "unverified",
+            format!("Found an API key ({via}) but could not verify it with the server: {e:#}\nAPI Key: {masked}"),
+        )),
     }
 }
 
@@ -251,7 +320,10 @@ enum AuthCommands {
         token_stdin: bool,
     },
     Logout,
-    Status,
+    Status {
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -567,8 +639,7 @@ async fn run() -> Result<()> {
                     };
 
                     if let Some(api_key) = token {
-                        // Manual token input (no email available)
-                        auth_manager.store_credentials(&api_key, None)?;
+                        auth_manager.store_credentials(&api_key)?;
                         println!("✓ Successfully stored API key");
                     } else {
                         if is_non_interactive() {
@@ -580,8 +651,7 @@ async fn run() -> Result<()> {
                         // Browser-based login
                         match login_with_browser().await {
                             Ok(result) => {
-                                auth_manager
-                                    .store_credentials(&result.api_key, result.email.as_deref())?;
+                                auth_manager.store_credentials(&result.api_key)?;
                                 println!("✓ Successfully authenticated!");
                             }
                             Err(e) => {
@@ -608,28 +678,8 @@ async fn run() -> Result<()> {
                         None => println!("✓ Successfully logged out"),
                     }
                 }
-                AuthCommands::Status => {
-                    let auth_info = auth_manager.get_auth_info();
-                    match auth_info.source {
-                        AuthSource::Environment => {
-                            println!("✓ Authenticated (via WAVEDASH_TOKEN environment variable)");
-                            if let Some(api_key) = auth_info.api_key {
-                                println!("Token: {}", mask_token(&api_key));
-                            }
-                        }
-                        AuthSource::File => {
-                            println!("✓ Authenticated (via stored credentials)");
-                            if let Some(email) = auth_info.email {
-                                println!("Email: {}", email);
-                            }
-                            if let Some(api_key) = auth_info.api_key {
-                                println!("API Key: {}", mask_token(&api_key));
-                            }
-                        }
-                        AuthSource::None => {
-                            println!("Not authenticated. Run 'wavedash auth login' or set WAVEDASH_TOKEN environment variable.");
-                        }
-                    }
+                AuthCommands::Status { json } => {
+                    handle_auth_status(auth_manager.get_auth_info(), json).await?
                 }
             }
         }
@@ -936,6 +986,32 @@ mod tests {
                 assert!(json);
             }
             _ => panic!("parsed the wrong command"),
+        }
+    }
+
+    #[test]
+    fn auth_status_accepts_json_output() {
+        let cli = Cli::try_parse_from(["wavedash", "auth", "status", "--json"])
+            .expect("auth status should be a valid command");
+
+        match cli.command {
+            Some(Commands::Auth {
+                action: AuthCommands::Status { json },
+            }) => assert!(json),
+            _ => panic!("parsed the wrong command"),
+        }
+    }
+
+    #[test]
+    fn auth_failure_is_still_an_error_whatever_the_output_mode() {
+        for json in [false, true] {
+            let err = auth_failure(
+                json,
+                &AuthSource::None,
+                "not_authenticated",
+                "Not authenticated.".into(),
+            );
+            assert_eq!(err.to_string(), "Not authenticated.");
         }
     }
 
