@@ -28,7 +28,6 @@ use init::{
     handle_init, handle_project_create, handle_project_list, handle_team_create, handle_team_list,
 };
 use publish::{handle_publish, PublishArgs};
-use serde::Serialize;
 use stats::{handle_stat_create, handle_stat_delete, handle_stat_update};
 use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
@@ -41,11 +40,17 @@ fn mask_token(token: &str) -> String {
     }
 }
 
-#[derive(Serialize)]
-struct AuthStatus {
-    source: AuthSource,
-    username: String,
-    email: String,
+fn auth_failure(json: bool, source: &AuthSource, reason: &str, message: String) -> anyhow::Error {
+    if json {
+        let verdict = serde_json::json!({
+            "authenticated": false,
+            "source": source,
+            "reason": reason,
+            "message": message,
+        });
+        println!("{verdict:#}");
+    }
+    anyhow::anyhow!(message)
 }
 
 async fn handle_auth_status(auth_info: AuthInfo, json: bool) -> Result<()> {
@@ -60,19 +65,27 @@ async fn handle_auth_status(auth_info: AuthInfo, json: bool) -> Result<()> {
             "via stored credentials",
             "Run `wavedash auth login` to re-authenticate.",
         ),
-        _ => anyhow::bail!("Not authenticated. Run `wavedash auth login` or set WAVEDASH_TOKEN."),
+        _ => {
+            return Err(auth_failure(
+                json,
+                &auth_info.source,
+                "not_authenticated",
+                "Not authenticated. Run `wavedash auth login` or set WAVEDASH_TOKEN.".into(),
+            ))
+        }
     };
     let masked = mask_token(&api_key);
 
     match verify_api_key(&api_key).await {
         Ok(Verification::Valid(identity)) => {
             if json {
-                let status = AuthStatus {
-                    source: auth_info.source,
-                    username: identity.username,
-                    email: identity.email,
-                };
-                println!("{}", serde_json::to_string_pretty(&status)?);
+                let verdict = serde_json::json!({
+                    "authenticated": true,
+                    "source": auth_info.source,
+                    "username": identity.username,
+                    "email": identity.email,
+                });
+                println!("{verdict:#}");
             } else {
                 println!("✓ Authenticated ({via})");
                 println!("Username: {}", identity.username);
@@ -81,12 +94,18 @@ async fn handle_auth_status(auth_info: AuthInfo, json: bool) -> Result<()> {
             }
             Ok(())
         }
-        Ok(Verification::Rejected) => anyhow::bail!(
-            "The API key ({via}) was rejected by the server. It may have been revoked, or the account may no longer be active.\nAPI Key: {masked}\n{fix}"
-        ),
-        Err(e) => anyhow::bail!(
-            "Found an API key ({via}) but could not verify it with the server: {e:#}\nAPI Key: {masked}"
-        ),
+        Ok(Verification::Rejected) => Err(auth_failure(
+            json,
+            &auth_info.source,
+            "rejected",
+            format!("The API key ({via}) was rejected by the server. It may have been revoked, or the account may no longer be active.\nAPI Key: {masked}\n{fix}"),
+        )),
+        Err(e) => Err(auth_failure(
+            json,
+            &auth_info.source,
+            "unverified",
+            format!("Found an API key ({via}) but could not verify it with the server: {e:#}\nAPI Key: {masked}"),
+        )),
     }
 }
 
@@ -984,22 +1003,16 @@ mod tests {
     }
 
     #[test]
-    fn auth_status_json_has_only_source_username_and_email() {
-        let status = AuthStatus {
-            source: AuthSource::Environment,
-            username: "walten".into(),
-            email: "walten@wavedash.com".into(),
-        };
-
-        let value = serde_json::to_value(status).expect("status should serialize");
-        assert_eq!(
-            value,
-            serde_json::json!({
-                "source": "environment",
-                "username": "walten",
-                "email": "walten@wavedash.com",
-            })
-        );
+    fn auth_failure_is_still_an_error_whatever_the_output_mode() {
+        for json in [false, true] {
+            let err = auth_failure(
+                json,
+                &AuthSource::None,
+                "not_authenticated",
+                "Not authenticated.".into(),
+            );
+            assert_eq!(err.to_string(), "Not authenticated.");
+        }
     }
 
     #[test]
