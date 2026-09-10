@@ -42,12 +42,10 @@ fn mask_token(token: &str) -> String {
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct AuthStatus {
     source: AuthSource,
     username: String,
     email: String,
-    api_key: String,
 }
 
 async fn handle_auth_status(auth_info: AuthInfo, json: bool) -> Result<()> {
@@ -73,7 +71,6 @@ async fn handle_auth_status(auth_info: AuthInfo, json: bool) -> Result<()> {
                     source: auth_info.source,
                     username: identity.username,
                     email: identity.email,
-                    api_key: masked,
                 };
                 println!("{}", serde_json::to_string_pretty(&status)?);
             } else {
@@ -987,18 +984,22 @@ mod tests {
     }
 
     #[test]
-    fn auth_status_json_uses_camel_case_and_lowercase_source() {
+    fn auth_status_json_has_only_source_username_and_email() {
         let status = AuthStatus {
             source: AuthSource::Environment,
             username: "walten".into(),
             email: "walten@wavedash.com".into(),
-            api_key: "wd_455...f62".into(),
         };
 
         let value = serde_json::to_value(status).expect("status should serialize");
-        assert_eq!(value["source"], "environment");
-        assert_eq!(value["apiKey"], "wd_455...f62");
-        assert!(value.get("api_key").is_none());
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "source": "environment",
+                "username": "walten",
+                "email": "walten@wavedash.com",
+            })
+        );
     }
 
     #[test]
