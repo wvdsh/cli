@@ -23,8 +23,6 @@ const AUTH_CODE_REDEEM_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Serialize, Deserialize)]
 struct Credentials {
     api_key: String,
-    #[serde(default)]
-    email: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -37,12 +35,22 @@ pub enum AuthSource {
 pub struct AuthInfo {
     pub source: AuthSource,
     pub api_key: Option<String>,
-    pub email: Option<String>,
 }
 
 pub struct LoginResult {
     pub api_key: String,
-    pub email: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+pub struct Identity {
+    pub username: String,
+    pub email: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Verification {
+    Valid(Identity),
+    Rejected,
 }
 
 #[derive(Serialize)]
@@ -57,7 +65,6 @@ struct RedeemAuthCodeRequest {
 struct RedeemAuthCodeResponse {
     #[serde(rename = "apiKey")]
     api_key: String,
-    email: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -82,7 +89,7 @@ impl AuthManager {
         Ok(Self)
     }
 
-    pub fn store_credentials(&self, api_key: &str, email: Option<&str>) -> Result<()> {
+    pub fn store_credentials(&self, api_key: &str) -> Result<()> {
         // [`Self::resolve_auth`] treats a blank stored key as a corrupt file and
         // reports it as unauthenticated, so writing one would leave `auth login`
         // announcing success over a key `auth status` then disowns. Every way of
@@ -103,10 +110,7 @@ impl AuthManager {
             }
         }
 
-        let credentials = Credentials {
-            api_key,
-            email: email.map(|s| s.to_string()),
-        };
+        let credentials = Credentials { api_key };
         let json = serde_json::to_string(&credentials)?;
         fs::write(&path, &json)?;
 
@@ -149,7 +153,6 @@ impl AuthManager {
             return AuthInfo {
                 source: AuthSource::Environment,
                 api_key: Some(api_key),
-                email: None, // No email available from env var
             };
         }
 
@@ -160,7 +163,6 @@ impl AuthManager {
                 return AuthInfo {
                     source: AuthSource::File,
                     api_key: Some(api_key),
-                    email: creds.email,
                 };
             }
         }
@@ -168,7 +170,6 @@ impl AuthManager {
         AuthInfo {
             source: AuthSource::None,
             api_key: None,
-            email: None,
         }
     }
 
@@ -183,6 +184,29 @@ impl AuthManager {
         }
         Ok(())
     }
+}
+
+pub async fn verify_api_key(api_key: &str) -> Result<Verification> {
+    let client = config::create_http_client()?;
+    let api_host = config::get("api_host")?;
+    verify_api_key_at(&client, &api_host, api_key).await
+}
+
+async fn verify_api_key_at(
+    client: &reqwest::Client,
+    api_host: &str,
+    api_key: &str,
+) -> Result<Verification> {
+    let response = client
+        .get(format!("{}/api/me", api_host))
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Ok(Verification::Rejected);
+    }
+    let response = config::check_api_response(response).await?;
+    Ok(Verification::Valid(response.json::<Identity>().await?))
 }
 
 pub(crate) fn require_api_key() -> Result<String> {
@@ -452,7 +476,6 @@ async fn redeem_auth_code(code: String, state: &str, code_verifier: &str) -> Res
 
     Ok(LoginResult {
         api_key: body.api_key,
-        email: body.email,
     })
 }
 
@@ -535,8 +558,83 @@ mod tests {
     fn stored(api_key: &str) -> Option<Credentials> {
         Some(Credentials {
             api_key: api_key.to_string(),
-            email: Some("dev@wavedash.com".to_string()),
         })
+    }
+
+    async fn serve_me(status: u16, body: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api_host = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new().route(
+            "/api/me",
+            axum::routing::get(move |headers: axum::http::HeaderMap| async move {
+                let auth = headers
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default();
+                assert_eq!(auth, "Bearer the_key");
+                (
+                    axum::http::StatusCode::from_u16(status).unwrap(),
+                    [("content-type", "application/json")],
+                    body,
+                )
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        api_host
+    }
+
+    #[tokio::test]
+    async fn a_valid_key_resolves_to_its_owner() {
+        let api_host = serve_me(
+            200,
+            r#"{"userId":"users_1","username":"walten","email":"walten@wavedash.com"}"#,
+        )
+        .await;
+
+        let verification = verify_api_key_at(&reqwest::Client::new(), &api_host, "the_key")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            verification,
+            Verification::Valid(Identity {
+                username: "walten".into(),
+                email: "walten@wavedash.com".into(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rejected_key_is_reported_as_rejected_not_as_an_error() {
+        let api_host = serve_me(
+            401,
+            r#"{"error":"Unauthorized - invalid API key","code":"unauthorized"}"#,
+        )
+        .await;
+
+        let verification = verify_api_key_at(&reqwest::Client::new(), &api_host, "the_key")
+            .await
+            .unwrap();
+
+        assert_eq!(verification, Verification::Rejected);
+    }
+
+    #[tokio::test]
+    async fn a_server_failure_is_an_error_not_a_verdict() {
+        let api_host = serve_me(
+            500,
+            r#"{"error":"Failed to resolve identity","code":"fatal"}"#,
+        )
+        .await;
+
+        let err = verify_api_key_at(&reqwest::Client::new(), &api_host, "the_key")
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.to_string().contains("Failed to resolve identity"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -596,7 +694,7 @@ mod tests {
     fn a_blank_api_key_is_never_stored() {
         for blank in ["", "   ", "\t", "\n"] {
             let err = AuthManager
-                .store_credentials(blank, None)
+                .store_credentials(blank)
                 .expect_err(&format!("stored blank key {:?}", blank));
 
             assert!(

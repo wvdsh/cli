@@ -17,7 +17,7 @@ use achievements::{
     handle_achievement_update, CreateAchievementArgs, UpdateAchievementArgs,
 };
 use anyhow::Result;
-use auth::{login_with_browser, AuthManager, AuthSource};
+use auth::{login_with_browser, verify_api_key, AuthInfo, AuthManager, AuthSource, Verification};
 use builds::handle_build_push;
 use clap::{Parser, Subcommand};
 use clear_playtest_data::{handle_clear_playtest_data, ClearPlaytestDataArgs};
@@ -37,6 +37,42 @@ fn mask_token(token: &str) -> String {
         format!("{}...{}", &token[..6], &token[token.len() - 3..])
     } else {
         "***".to_string()
+    }
+}
+
+async fn handle_auth_status(auth_info: AuthInfo) -> Result<()> {
+    let (api_key, via, fix) = match (auth_info.source, auth_info.api_key) {
+        (AuthSource::Environment, Some(api_key)) => (
+            api_key,
+            "via WAVEDASH_TOKEN environment variable",
+            "Unset WAVEDASH_TOKEN or set it to a valid key.",
+        ),
+        (AuthSource::File, Some(api_key)) => (
+            api_key,
+            "via stored credentials",
+            "Run `wavedash auth login` to re-authenticate.",
+        ),
+        _ => {
+            println!("Not authenticated. Run 'wavedash auth login' or set WAVEDASH_TOKEN environment variable.");
+            return Ok(());
+        }
+    };
+    let masked = mask_token(&api_key);
+
+    match verify_api_key(&api_key).await {
+        Ok(Verification::Valid(identity)) => {
+            println!("✓ Authenticated ({via})");
+            println!("Username: {}", identity.username);
+            println!("Email: {}", identity.email);
+            println!("API Key: {masked}");
+            Ok(())
+        }
+        Ok(Verification::Rejected) => anyhow::bail!(
+            "The API key ({via}) was rejected by the server. It may have been revoked, or the account may no longer be active.\nAPI Key: {masked}\n{fix}"
+        ),
+        Err(e) => anyhow::bail!(
+            "Found an API key ({via}) but could not verify it with the server: {e:#}\nAPI Key: {masked}"
+        ),
     }
 }
 
@@ -567,8 +603,7 @@ async fn run() -> Result<()> {
                     };
 
                     if let Some(api_key) = token {
-                        // Manual token input (no email available)
-                        auth_manager.store_credentials(&api_key, None)?;
+                        auth_manager.store_credentials(&api_key)?;
                         println!("✓ Successfully stored API key");
                     } else {
                         if is_non_interactive() {
@@ -580,8 +615,7 @@ async fn run() -> Result<()> {
                         // Browser-based login
                         match login_with_browser().await {
                             Ok(result) => {
-                                auth_manager
-                                    .store_credentials(&result.api_key, result.email.as_deref())?;
+                                auth_manager.store_credentials(&result.api_key)?;
                                 println!("✓ Successfully authenticated!");
                             }
                             Err(e) => {
@@ -608,29 +642,7 @@ async fn run() -> Result<()> {
                         None => println!("✓ Successfully logged out"),
                     }
                 }
-                AuthCommands::Status => {
-                    let auth_info = auth_manager.get_auth_info();
-                    match auth_info.source {
-                        AuthSource::Environment => {
-                            println!("✓ Authenticated (via WAVEDASH_TOKEN environment variable)");
-                            if let Some(api_key) = auth_info.api_key {
-                                println!("Token: {}", mask_token(&api_key));
-                            }
-                        }
-                        AuthSource::File => {
-                            println!("✓ Authenticated (via stored credentials)");
-                            if let Some(email) = auth_info.email {
-                                println!("Email: {}", email);
-                            }
-                            if let Some(api_key) = auth_info.api_key {
-                                println!("API Key: {}", mask_token(&api_key));
-                            }
-                        }
-                        AuthSource::None => {
-                            println!("Not authenticated. Run 'wavedash auth login' or set WAVEDASH_TOKEN environment variable.");
-                        }
-                    }
-                }
+                AuthCommands::Status => handle_auth_status(auth_manager.get_auth_info()).await?,
             }
         }
         Commands::Build { action } => match action {
