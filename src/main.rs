@@ -1,5 +1,6 @@
 mod achievements;
 mod auth;
+mod authority;
 mod browser;
 mod builds;
 mod clear_playtest_data;
@@ -18,6 +19,7 @@ use achievements::{
 };
 use anyhow::Result;
 use auth::{login_with_browser, verify_api_key, AuthInfo, AuthManager, AuthSource, Verification};
+use authority::Authority;
 use builds::handle_build_push;
 use clap::{Parser, Subcommand};
 use clear_playtest_data::{handle_clear_playtest_data, ClearPlaytestDataArgs};
@@ -28,7 +30,7 @@ use init::{
     handle_init, handle_project_create, handle_project_list, handle_team_create, handle_team_list,
 };
 use publish::{handle_publish, PublishArgs};
-use stats::{handle_stat_create, handle_stat_delete, handle_stat_update};
+use stats::{handle_stat_create, handle_stat_delete, handle_stat_list, handle_stat_update};
 use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 
@@ -382,6 +384,24 @@ enum ProjectCommands {
 
 #[derive(Subcommand)]
 enum StatCommands {
+    #[command(about = "List stats for a game")]
+    List {
+        #[arg(
+            long = "game-id",
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
+    },
     #[command(about = "Create a new stat for a game")]
     Create {
         #[arg(
@@ -401,6 +421,13 @@ enum StatCommands {
         identifier: String,
         #[arg(long, help = "Stat display name")]
         name: String,
+        #[arg(
+            long,
+            value_enum,
+            ignore_case = true,
+            help = "Who may write this stat: client (the game, default) or server (your backend only)"
+        )]
+        authority: Option<Authority>,
     },
     #[command(about = "Update a stat's identifier and display name")]
     Update {
@@ -423,6 +450,13 @@ enum StatCommands {
         identifier: String,
         #[arg(long, help = "New display name")]
         name: String,
+        #[arg(
+            long,
+            value_enum,
+            ignore_case = true,
+            help = "New authority: client (the game) or server (your backend only)"
+        )]
+        authority: Option<Authority>,
     },
     #[command(about = "Delete a stat")]
     Delete {
@@ -490,6 +524,13 @@ enum AchievementCommands {
         #[arg(long, help = "Mark the achievement as secret", default_value_t = false)]
         secret: bool,
         #[arg(
+            long,
+            value_enum,
+            ignore_case = true,
+            help = "Who may unlock this achievement: client (the game, default) or server (your backend only)"
+        )]
+        authority: Option<Authority>,
+        #[arg(
             long = "triggered-by-stat-id",
             help = "Stat ID that triggers this achievement (omit for a standard achievement)"
         )]
@@ -530,6 +571,13 @@ enum AchievementCommands {
         description: Option<String>,
         #[arg(long, help = "Mark/unmark as secret")]
         secret: Option<bool>,
+        #[arg(
+            long,
+            value_enum,
+            ignore_case = true,
+            help = "New authority: client (the game) or server (your backend only)"
+        )]
+        authority: Option<Authority>,
         #[arg(
             long = "triggered-by-stat-id",
             help = "Stat ID that triggers this achievement (pass empty string \"\" to clear)"
@@ -754,14 +802,23 @@ async fn run() -> Result<()> {
             }
         },
         Commands::Stat { action } => match action {
+            StatCommands::List {
+                game_id,
+                config,
+                json,
+            } => {
+                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                handle_stat_list(&game_id, json).await?;
+            }
             StatCommands::Create {
                 game_id,
                 config,
                 identifier,
                 name,
+                authority,
             } => {
                 let game_id = resolve_game_id(game_id.as_deref(), &config)?;
-                handle_stat_create(&game_id, &identifier, &name).await?;
+                handle_stat_create(&game_id, &identifier, &name, authority).await?;
             }
             StatCommands::Update {
                 game_id,
@@ -769,9 +826,10 @@ async fn run() -> Result<()> {
                 id,
                 identifier,
                 name,
+                authority,
             } => {
                 let game_id = resolve_game_id(game_id.as_deref(), &config)?;
-                handle_stat_update(&game_id, &id, &identifier, &name).await?;
+                handle_stat_update(&game_id, &id, &identifier, &name, authority).await?;
             }
             StatCommands::Delete {
                 game_id,
@@ -800,6 +858,7 @@ async fn run() -> Result<()> {
                     title,
                     description,
                     secret,
+                    authority,
                     triggered_by_stat_id,
                     threshold,
                     image,
@@ -811,6 +870,7 @@ async fn run() -> Result<()> {
                         title: &title,
                         description: &description,
                         secret,
+                        authority,
                         triggered_by_stat_id: triggered_by_stat_id.as_deref(),
                         stat_threshold: threshold,
                         image_path: image.as_deref(),
@@ -825,6 +885,7 @@ async fn run() -> Result<()> {
                     title,
                     description,
                     secret,
+                    authority,
                     triggered_by_stat_id,
                     threshold,
                     image,
@@ -846,6 +907,7 @@ async fn run() -> Result<()> {
                         identifier: identifier.as_deref(),
                         description: description.as_deref(),
                         secret,
+                        authority,
                         triggered_by_stat_id: triggered,
                         stat_threshold: threshold,
                         image_path: image.as_deref(),
@@ -975,16 +1037,137 @@ mod tests {
 
         match cli.command {
             Some(Commands::Achievement {
-                action:
-                    AchievementCommands::List {
-                        game_id,
-                        json,
-                        ..
-                    },
+                action: AchievementCommands::List { game_id, json, .. },
             }) => {
                 assert_eq!(game_id.as_deref(), Some("game-id"));
                 assert!(json);
             }
+            _ => panic!("parsed the wrong command"),
+        }
+    }
+
+    #[test]
+    fn stat_list_accepts_game_id_and_json_output() {
+        let cli =
+            Cli::try_parse_from(["wavedash", "stat", "list", "--game-id", "game-id", "--json"])
+                .expect("stat list should be a valid command");
+
+        match cli.command {
+            Some(Commands::Stat {
+                action: StatCommands::List { game_id, json, .. },
+            }) => {
+                assert_eq!(game_id.as_deref(), Some("game-id"));
+                assert!(json);
+            }
+            _ => panic!("parsed the wrong command"),
+        }
+    }
+
+    #[test]
+    fn stat_and_achievement_update_accept_authority() {
+        let cli = Cli::try_parse_from([
+            "wavedash",
+            "stat",
+            "update",
+            "--game-id",
+            "game-id",
+            "--id",
+            "stat-id",
+            "--identifier",
+            "WINS",
+            "--name",
+            "Wins",
+            "--authority",
+            "server",
+        ])
+        .expect("stat update should accept --authority");
+        match cli.command {
+            Some(Commands::Stat {
+                action: StatCommands::Update { authority, .. },
+            }) => assert_eq!(authority, Some(Authority::Server)),
+            _ => panic!("parsed the wrong command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "wavedash",
+            "achievement",
+            "update",
+            "--game-id",
+            "game-id",
+            "--id",
+            "achievement-id",
+            "--authority",
+            "client",
+        ])
+        .expect("achievement update should accept --authority on its own");
+        match cli.command {
+            Some(Commands::Achievement {
+                action: AchievementCommands::Update { authority, .. },
+            }) => assert_eq!(authority, Some(Authority::Client)),
+            _ => panic!("parsed the wrong command"),
+        }
+    }
+
+    #[test]
+    fn stat_and_achievement_create_accept_a_lowercase_authority() {
+        let cli = Cli::try_parse_from([
+            "wavedash",
+            "stat",
+            "create",
+            "--game-id",
+            "game-id",
+            "--identifier",
+            "WINS",
+            "--name",
+            "Wins",
+            "--authority",
+            "server",
+        ])
+        .expect("stat create should accept --authority server");
+        match cli.command {
+            Some(Commands::Stat {
+                action: StatCommands::Create { authority, .. },
+            }) => assert_eq!(authority, Some(Authority::Server)),
+            _ => panic!("parsed the wrong command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "wavedash",
+            "achievement",
+            "create",
+            "--game-id",
+            "game-id",
+            "--identifier",
+            "CUP",
+            "--title",
+            "Cup",
+            "--description",
+            "Win a cup",
+        ])
+        .expect("achievement create should not require --authority");
+        match cli.command {
+            Some(Commands::Achievement {
+                action: AchievementCommands::Create { authority, .. },
+            }) => assert_eq!(authority, None),
+            _ => panic!("parsed the wrong command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "wavedash",
+            "stat",
+            "create",
+            "--identifier",
+            "WINS",
+            "--name",
+            "Wins",
+            "--authority",
+            "Server",
+        ])
+        .expect("the flag should not be case sensitive");
+        match cli.command {
+            Some(Commands::Stat {
+                action: StatCommands::Create { authority, .. },
+            }) => assert_eq!(authority, Some(Authority::Server)),
             _ => panic!("parsed the wrong command"),
         }
     }
