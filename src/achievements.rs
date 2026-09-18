@@ -9,21 +9,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::Path;
 
-/// The create response, narrowed to the fields printed by the command. This is
-/// deliberately separate from `Achievement`, whose list payload is larger.
-#[derive(Debug, Deserialize)]
-struct CreatedAchievement {
-    id: String,
-    identifier: String,
-    #[serde(rename = "displayName")]
-    display_name: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CreatedAchievementResponse {
-    achievement: CreatedAchievement,
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 struct Achievement {
     id: String,
@@ -38,6 +23,11 @@ struct Achievement {
     stat_id: Option<String>,
     #[serde(rename = "statThreshold", skip_serializing_if = "Option::is_none")]
     stat_threshold: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AchievementResponse {
+    achievement: Achievement,
 }
 
 #[derive(Debug, Deserialize)]
@@ -227,7 +217,7 @@ pub async fn handle_achievement_create(args: CreateAchievementArgs<'_>) -> Resul
         .await?;
 
     let resp = config::check_api_response(resp).await?;
-    let achievement = resp.json::<CreatedAchievementResponse>().await?.achievement;
+    let achievement = resp.json::<AchievementResponse>().await?.achievement;
     println!(
         "✓ Created achievement \"{}\" (id: {}, identifier: {})",
         achievement.display_name, achievement.id, achievement.identifier
@@ -370,6 +360,25 @@ mod tests {
         assert_eq!(achievement.authority, Authority::Server);
         assert_eq!(achievement.stat_id.as_deref(), Some("wins-stat-id"));
         assert_eq!(achievement.stat_threshold, Some(1.0));
+    }
+
+    #[test]
+    fn parses_the_achievement_create_response() {
+        let response: AchievementResponse = serde_json::from_value(json!({
+            "achievement": {
+                "id": "achievement-id",
+                "identifier": "FIRST_WIN",
+                "displayName": "First Win",
+                "description": "Win a match",
+                "image": "",
+                "secret": false,
+                "authority": "Client"
+            }
+        }))
+        .expect("the create response should deserialize");
+
+        assert_eq!(response.achievement.id, "achievement-id");
+        assert_eq!(response.achievement.identifier, "FIRST_WIN");
     }
 
     #[test]
