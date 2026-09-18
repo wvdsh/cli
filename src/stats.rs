@@ -6,10 +6,15 @@ use serde_json::json;
 
 #[derive(Debug, Deserialize)]
 struct Stat {
-    _id: String,
+    id: String,
     identifier: String,
     #[serde(rename = "displayName")]
     display_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct StatResponse {
+    stat: Stat,
 }
 
 pub async fn handle_stat_create(game_id: &str, identifier: &str, name: &str) -> Result<()> {
@@ -29,10 +34,10 @@ pub async fn handle_stat_create(game_id: &str, identifier: &str, name: &str) -> 
         .await?;
 
     let resp = config::check_api_response(resp).await?;
-    let stat: Stat = resp.json().await?;
+    let stat = resp.json::<StatResponse>().await?.stat;
     println!(
         "✓ Created stat \"{}\" (id: {}, identifier: {})",
-        stat.display_name, stat._id, stat.identifier
+        stat.display_name, stat.id, stat.identifier
     );
     Ok(())
 }

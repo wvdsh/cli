@@ -12,15 +12,20 @@ use std::path::Path;
 /// deliberately separate from `Achievement`, whose list payload is larger.
 #[derive(Debug, Deserialize)]
 struct CreatedAchievement {
-    _id: String,
+    id: String,
     identifier: String,
     #[serde(rename = "displayName")]
     display_name: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct CreatedAchievementResponse {
+    achievement: CreatedAchievement,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct Achievement {
-    _id: String,
+    id: String,
     identifier: String,
     #[serde(rename = "displayName")]
     display_name: String,
@@ -40,6 +45,11 @@ struct AchievementsResponse {
 
 #[derive(Debug, Deserialize)]
 struct ImageMediaUploadResponse {
+    upload: ImageMediaUpload,
+}
+
+#[derive(Debug, Deserialize)]
+struct ImageMediaUpload {
     #[serde(rename = "transformUrl")]
     transform_url: String,
     token: String,
@@ -84,7 +94,7 @@ async fn upload_achievement_image(
         .send()
         .await?;
     let resp = config::check_api_response(resp).await?;
-    let authorization: ImageMediaUploadResponse = resp.json().await?;
+    let authorization = resp.json::<ImageMediaUploadResponse>().await?.upload;
 
     let transform_resp = client
         .post(&authorization.transform_url)
@@ -154,7 +164,7 @@ pub async fn handle_achievement_list(game_id: &str, json: bool) -> Result<()> {
 
     for achievement in data.achievements {
         table.add_row(vec![
-            achievement._id,
+            achievement.id,
             achievement.identifier,
             achievement.display_name,
             achievement.description,
@@ -213,10 +223,10 @@ pub async fn handle_achievement_create(args: CreateAchievementArgs<'_>) -> Resul
         .await?;
 
     let resp = config::check_api_response(resp).await?;
-    let achievement: CreatedAchievement = resp.json().await?;
+    let achievement = resp.json::<CreatedAchievementResponse>().await?.achievement;
     println!(
         "✓ Created achievement \"{}\" (id: {}, identifier: {})",
-        achievement.display_name, achievement._id, achievement.identifier
+        achievement.display_name, achievement.id, achievement.identifier
     );
     Ok(())
 }
@@ -336,7 +346,7 @@ mod tests {
     fn parses_the_achievement_list_response() {
         let response: AchievementsResponse = serde_json::from_value(json!({
             "achievements": [{
-                "_id": "achievement-id",
+                "id": "achievement-id",
                 "identifier": "FIRST_WIN",
                 "displayName": "First Win",
                 "description": "Win a match",
@@ -349,7 +359,7 @@ mod tests {
         .expect("the API response should deserialize");
 
         let achievement = &response.achievements[0];
-        assert_eq!(achievement._id, "achievement-id");
+        assert_eq!(achievement.id, "achievement-id");
         assert_eq!(achievement.identifier, "FIRST_WIN");
         assert_eq!(achievement.display_name, "First Win");
         assert_eq!(achievement.stat_id.as_deref(), Some("wins-stat-id"));
@@ -360,7 +370,7 @@ mod tests {
     fn parses_an_achievement_without_a_stat_link() {
         let response: AchievementsResponse = serde_json::from_value(json!({
             "achievements": [{
-                "_id": "achievement-id",
+                "id": "achievement-id",
                 "identifier": "WELCOME",
                 "displayName": "Welcome",
                 "description": "Start the game",
@@ -379,24 +389,29 @@ mod tests {
     #[test]
     fn parses_an_image_media_upload_authorization() {
         let response: ImageMediaUploadResponse = serde_json::from_value(json!({
-            "transformUrl": "https://media.wavedash.com/transform",
-            "token": "signed-token",
-            "r2Key": "org/game/achievements/first-win.webp"
+            "upload": {
+                "transformUrl": "https://media.wavedash.com/transform",
+                "token": "signed-token",
+                "r2Key": "org/game/achievements/first-win.webp"
+            }
         }))
         .expect("the media upload authorization should deserialize");
 
         assert_eq!(
-            response.transform_url,
+            response.upload.transform_url,
             "https://media.wavedash.com/transform"
         );
-        assert_eq!(response.token, "signed-token");
-        assert_eq!(response.r2_key, "org/game/achievements/first-win.webp");
+        assert_eq!(response.upload.token, "signed-token");
+        assert_eq!(
+            response.upload.r2_key,
+            "org/game/achievements/first-win.webp"
+        );
     }
 
     #[test]
     fn json_output_uses_api_field_names_and_omits_empty_stat_fields() {
         let achievement = Achievement {
-            _id: "achievement-id".to_string(),
+            id: "achievement-id".to_string(),
             identifier: "WELCOME".to_string(),
             display_name: "Welcome".to_string(),
             description: "Start the game".to_string(),
