@@ -117,19 +117,25 @@ pub async fn handle_stat_update(
     stat_id: &str,
     identifier: &str,
     name: &str,
+    authority: Option<Authority>,
 ) -> Result<()> {
     let api_key = require_api_key()?;
     let client = config::create_http_client()?;
     let api_host = config::get("api_host")?;
     let url = format!("{}/api/games/{}/stats/{}", api_host, game_id, stat_id);
 
+    let mut body = json!({
+        "identifier": identifier,
+        "displayName": name,
+    });
+    if let Some(authority) = authority {
+        body["authority"] = json!(authority);
+    }
+
     let resp = client
         .patch(&url)
         .header("Authorization", format!("Bearer {}", api_key))
-        .json(&json!({
-            "identifier": identifier,
-            "displayName": name,
-        }))
+        .json(&body)
         .send()
         .await?;
 

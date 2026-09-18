@@ -450,6 +450,13 @@ enum StatCommands {
         identifier: String,
         #[arg(long, help = "New display name")]
         name: String,
+        #[arg(
+            long,
+            value_enum,
+            ignore_case = true,
+            help = "New authority: client (the game) or server (your backend only)"
+        )]
+        authority: Option<Authority>,
     },
     #[command(about = "Delete a stat")]
     Delete {
@@ -564,6 +571,13 @@ enum AchievementCommands {
         description: Option<String>,
         #[arg(long, help = "Mark/unmark as secret")]
         secret: Option<bool>,
+        #[arg(
+            long,
+            value_enum,
+            ignore_case = true,
+            help = "New authority: client (the game) or server (your backend only)"
+        )]
+        authority: Option<Authority>,
         #[arg(
             long = "triggered-by-stat-id",
             help = "Stat ID that triggers this achievement (pass empty string \"\" to clear)"
@@ -812,9 +826,10 @@ async fn run() -> Result<()> {
                 id,
                 identifier,
                 name,
+                authority,
             } => {
                 let game_id = resolve_game_id(game_id.as_deref(), &config)?;
-                handle_stat_update(&game_id, &id, &identifier, &name).await?;
+                handle_stat_update(&game_id, &id, &identifier, &name, authority).await?;
             }
             StatCommands::Delete {
                 game_id,
@@ -870,6 +885,7 @@ async fn run() -> Result<()> {
                     title,
                     description,
                     secret,
+                    authority,
                     triggered_by_stat_id,
                     threshold,
                     image,
@@ -891,6 +907,7 @@ async fn run() -> Result<()> {
                         identifier: identifier.as_deref(),
                         description: description.as_deref(),
                         secret,
+                        authority,
                         triggered_by_stat_id: triggered,
                         stat_threshold: threshold,
                         image_path: image.as_deref(),
@@ -1042,6 +1059,51 @@ mod tests {
                 assert_eq!(game_id.as_deref(), Some("game-id"));
                 assert!(json);
             }
+            _ => panic!("parsed the wrong command"),
+        }
+    }
+
+    #[test]
+    fn stat_and_achievement_update_accept_authority() {
+        let cli = Cli::try_parse_from([
+            "wavedash",
+            "stat",
+            "update",
+            "--game-id",
+            "game-id",
+            "--id",
+            "stat-id",
+            "--identifier",
+            "WINS",
+            "--name",
+            "Wins",
+            "--authority",
+            "server",
+        ])
+        .expect("stat update should accept --authority");
+        match cli.command {
+            Some(Commands::Stat {
+                action: StatCommands::Update { authority, .. },
+            }) => assert_eq!(authority, Some(Authority::Server)),
+            _ => panic!("parsed the wrong command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "wavedash",
+            "achievement",
+            "update",
+            "--game-id",
+            "game-id",
+            "--id",
+            "achievement-id",
+            "--authority",
+            "client",
+        ])
+        .expect("achievement update should accept --authority on its own");
+        match cli.command {
+            Some(Commands::Achievement {
+                action: AchievementCommands::Update { authority, .. },
+            }) => assert_eq!(authority, Some(Authority::Client)),
             _ => panic!("parsed the wrong command"),
         }
     }

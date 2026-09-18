@@ -21,6 +21,10 @@ struct Achievement {
     authority: Authority,
     #[serde(rename = "statId", skip_serializing_if = "Option::is_none")]
     stat_id: Option<String>,
+    #[serde(rename = "statIdentifier", skip_serializing_if = "Option::is_none")]
+    stat_identifier: Option<String>,
+    #[serde(rename = "statDisplayName", skip_serializing_if = "Option::is_none")]
+    stat_display_name: Option<String>,
     #[serde(rename = "statThreshold", skip_serializing_if = "Option::is_none")]
     stat_threshold: Option<f64>,
 }
@@ -147,7 +151,7 @@ pub async fn handle_achievement_list(game_id: &str, json: bool) -> Result<()> {
             Cell::new("Description"),
             Cell::new("Secret"),
             Cell::new("Authority"),
-            Cell::new("Stat ID"),
+            Cell::new("Stat"),
             Cell::new("Threshold"),
         ]);
 
@@ -159,7 +163,10 @@ pub async fn handle_achievement_list(game_id: &str, json: bool) -> Result<()> {
             achievement.description,
             (if achievement.secret { "yes" } else { "no" }).to_string(),
             achievement.authority.to_string(),
-            achievement.stat_id.unwrap_or_else(|| "-".to_string()),
+            achievement
+                .stat_identifier
+                .or(achievement.stat_id)
+                .unwrap_or_else(|| "-".to_string()),
             achievement
                 .stat_threshold
                 .map(|threshold| threshold.to_string())
@@ -232,6 +239,7 @@ pub struct UpdateAchievementArgs<'a> {
     pub identifier: Option<&'a str>,
     pub description: Option<&'a str>,
     pub secret: Option<bool>,
+    pub authority: Option<Authority>,
     /// `Some(Some(id))` sets the stat link, `Some(None)` clears it,
     /// `None` leaves it alone.
     pub triggered_by_stat_id: Option<Option<&'a str>>,
@@ -270,6 +278,9 @@ pub async fn handle_achievement_update(args: UpdateAchievementArgs<'_>) -> Resul
     }
     if let Some(secret) = args.secret {
         body.insert("secret".into(), json!(secret));
+    }
+    if let Some(authority) = args.authority {
+        body.insert("authority".into(), json!(authority));
     }
     if let Some(r2_key) = image_r2_key {
         body.insert("image".into(), json!(r2_key));
@@ -348,6 +359,8 @@ mod tests {
                 "secret": false,
                 "authority": "Server",
                 "statId": "wins-stat-id",
+                "statIdentifier": "WINS",
+                "statDisplayName": "Wins",
                 "statThreshold": 1
             }]
         }))
@@ -359,6 +372,8 @@ mod tests {
         assert_eq!(achievement.display_name, "First Win");
         assert_eq!(achievement.authority, Authority::Server);
         assert_eq!(achievement.stat_id.as_deref(), Some("wins-stat-id"));
+        assert_eq!(achievement.stat_identifier.as_deref(), Some("WINS"));
+        assert_eq!(achievement.stat_display_name.as_deref(), Some("Wins"));
         assert_eq!(achievement.stat_threshold, Some(1.0));
     }
 
@@ -399,6 +414,7 @@ mod tests {
         let achievement = &response.achievements[0];
         assert!(achievement.secret);
         assert_eq!(achievement.stat_id, None);
+        assert_eq!(achievement.stat_identifier, None);
         assert_eq!(achievement.stat_threshold, None);
     }
 
@@ -435,6 +451,8 @@ mod tests {
             secret: false,
             authority: Authority::Client,
             stat_id: None,
+            stat_identifier: None,
+            stat_display_name: None,
             stat_threshold: None,
         };
 
@@ -444,6 +462,8 @@ mod tests {
         assert_eq!(value["authority"], "Client");
         assert!(value.get("display_name").is_none());
         assert!(value.get("statId").is_none());
+        assert!(value.get("statIdentifier").is_none());
+        assert!(value.get("statDisplayName").is_none());
         assert!(value.get("statThreshold").is_none());
     }
 }
