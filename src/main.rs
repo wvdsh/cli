@@ -30,7 +30,7 @@ use init::{
     handle_init, handle_project_create, handle_project_list, handle_team_create, handle_team_list,
 };
 use publish::{handle_publish, PublishArgs};
-use stats::{handle_stat_create, handle_stat_delete, handle_stat_update};
+use stats::{handle_stat_create, handle_stat_delete, handle_stat_list, handle_stat_update};
 use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 
@@ -384,6 +384,24 @@ enum ProjectCommands {
 
 #[derive(Subcommand)]
 enum StatCommands {
+    #[command(about = "List stats for a game")]
+    List {
+        #[arg(
+            long = "game-id",
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
+    },
     #[command(about = "Create a new stat for a game")]
     Create {
         #[arg(
@@ -770,6 +788,14 @@ async fn run() -> Result<()> {
             }
         },
         Commands::Stat { action } => match action {
+            StatCommands::List {
+                game_id,
+                config,
+                json,
+            } => {
+                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                handle_stat_list(&game_id, json).await?;
+            }
             StatCommands::Create {
                 game_id,
                 config,
@@ -995,6 +1021,23 @@ mod tests {
         match cli.command {
             Some(Commands::Achievement {
                 action: AchievementCommands::List { game_id, json, .. },
+            }) => {
+                assert_eq!(game_id.as_deref(), Some("game-id"));
+                assert!(json);
+            }
+            _ => panic!("parsed the wrong command"),
+        }
+    }
+
+    #[test]
+    fn stat_list_accepts_game_id_and_json_output() {
+        let cli =
+            Cli::try_parse_from(["wavedash", "stat", "list", "--game-id", "game-id", "--json"])
+                .expect("stat list should be a valid command");
+
+        match cli.command {
+            Some(Commands::Stat {
+                action: StatCommands::List { game_id, json, .. },
             }) => {
                 assert_eq!(game_id.as_deref(), Some("game-id"));
                 assert!(json);
