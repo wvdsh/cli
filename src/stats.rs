@@ -11,7 +11,6 @@ struct Stat {
     identifier: String,
     #[serde(rename = "displayName")]
     display_name: String,
-    authority: Authority,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,8 +47,8 @@ pub async fn handle_stat_create(
     let resp = config::check_api_response(resp).await?;
     let stat = resp.json::<StatResponse>().await?.stat;
     println!(
-        "✓ Created stat \"{}\" (id: {}, identifier: {}, authority: {})",
-        stat.display_name, stat.id, stat.identifier, stat.authority
+        "✓ Created stat \"{}\" (id: {}, identifier: {})",
+        stat.display_name, stat.id, stat.identifier
     );
     Ok(())
 }

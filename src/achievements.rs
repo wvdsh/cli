@@ -17,7 +17,6 @@ struct CreatedAchievement {
     identifier: String,
     #[serde(rename = "displayName")]
     display_name: String,
-    authority: Authority,
 }
 
 #[derive(Debug, Deserialize)]
@@ -230,8 +229,8 @@ pub async fn handle_achievement_create(args: CreateAchievementArgs<'_>) -> Resul
     let resp = config::check_api_response(resp).await?;
     let achievement = resp.json::<CreatedAchievementResponse>().await?.achievement;
     println!(
-        "✓ Created achievement \"{}\" (id: {}, identifier: {}, authority: {})",
-        achievement.display_name, achievement.id, achievement.identifier, achievement.authority
+        "✓ Created achievement \"{}\" (id: {}, identifier: {})",
+        achievement.display_name, achievement.id, achievement.identifier
     );
     Ok(())
 }
