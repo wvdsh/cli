@@ -1,5 +1,6 @@
 mod achievements;
 mod auth;
+mod authority;
 mod browser;
 mod builds;
 mod clear_playtest_data;
@@ -18,6 +19,7 @@ use achievements::{
 };
 use anyhow::Result;
 use auth::{login_with_browser, verify_api_key, AuthInfo, AuthManager, AuthSource, Verification};
+use authority::Authority;
 use builds::handle_build_push;
 use clap::{Parser, Subcommand};
 use clear_playtest_data::{handle_clear_playtest_data, ClearPlaytestDataArgs};
@@ -401,6 +403,13 @@ enum StatCommands {
         identifier: String,
         #[arg(long, help = "Stat display name")]
         name: String,
+        #[arg(
+            long,
+            value_enum,
+            ignore_case = true,
+            help = "Who may write this stat: client (the game, default) or server (your backend only)"
+        )]
+        authority: Option<Authority>,
     },
     #[command(about = "Update a stat's identifier and display name")]
     Update {
@@ -489,6 +498,13 @@ enum AchievementCommands {
         description: String,
         #[arg(long, help = "Mark the achievement as secret", default_value_t = false)]
         secret: bool,
+        #[arg(
+            long,
+            value_enum,
+            ignore_case = true,
+            help = "Who may unlock this achievement: client (the game, default) or server (your backend only)"
+        )]
+        authority: Option<Authority>,
         #[arg(
             long = "triggered-by-stat-id",
             help = "Stat ID that triggers this achievement (omit for a standard achievement)"
@@ -759,9 +775,10 @@ async fn run() -> Result<()> {
                 config,
                 identifier,
                 name,
+                authority,
             } => {
                 let game_id = resolve_game_id(game_id.as_deref(), &config)?;
-                handle_stat_create(&game_id, &identifier, &name).await?;
+                handle_stat_create(&game_id, &identifier, &name, authority).await?;
             }
             StatCommands::Update {
                 game_id,
@@ -800,6 +817,7 @@ async fn run() -> Result<()> {
                     title,
                     description,
                     secret,
+                    authority,
                     triggered_by_stat_id,
                     threshold,
                     image,
@@ -811,6 +829,7 @@ async fn run() -> Result<()> {
                         title: &title,
                         description: &description,
                         secret,
+                        authority,
                         triggered_by_stat_id: triggered_by_stat_id.as_deref(),
                         stat_threshold: threshold,
                         image_path: image.as_deref(),
@@ -975,16 +994,75 @@ mod tests {
 
         match cli.command {
             Some(Commands::Achievement {
-                action:
-                    AchievementCommands::List {
-                        game_id,
-                        json,
-                        ..
-                    },
+                action: AchievementCommands::List { game_id, json, .. },
             }) => {
                 assert_eq!(game_id.as_deref(), Some("game-id"));
                 assert!(json);
             }
+            _ => panic!("parsed the wrong command"),
+        }
+    }
+
+    #[test]
+    fn stat_and_achievement_create_accept_a_lowercase_authority() {
+        let cli = Cli::try_parse_from([
+            "wavedash",
+            "stat",
+            "create",
+            "--game-id",
+            "game-id",
+            "--identifier",
+            "WINS",
+            "--name",
+            "Wins",
+            "--authority",
+            "server",
+        ])
+        .expect("stat create should accept --authority server");
+        match cli.command {
+            Some(Commands::Stat {
+                action: StatCommands::Create { authority, .. },
+            }) => assert_eq!(authority, Some(Authority::Server)),
+            _ => panic!("parsed the wrong command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "wavedash",
+            "achievement",
+            "create",
+            "--game-id",
+            "game-id",
+            "--identifier",
+            "CUP",
+            "--title",
+            "Cup",
+            "--description",
+            "Win a cup",
+        ])
+        .expect("achievement create should not require --authority");
+        match cli.command {
+            Some(Commands::Achievement {
+                action: AchievementCommands::Create { authority, .. },
+            }) => assert_eq!(authority, None),
+            _ => panic!("parsed the wrong command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "wavedash",
+            "stat",
+            "create",
+            "--identifier",
+            "WINS",
+            "--name",
+            "Wins",
+            "--authority",
+            "Server",
+        ])
+        .expect("the flag should not be case sensitive");
+        match cli.command {
+            Some(Commands::Stat {
+                action: StatCommands::Create { authority, .. },
+            }) => assert_eq!(authority, Some(Authority::Server)),
             _ => panic!("parsed the wrong command"),
         }
     }

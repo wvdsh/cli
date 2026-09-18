@@ -1,4 +1,5 @@
 use crate::auth::require_api_key;
+use crate::authority::Authority;
 use crate::config;
 use anyhow::{Context, Result};
 use comfy_table::modifiers::UTF8_ROUND_CORNERS;
@@ -16,6 +17,7 @@ struct CreatedAchievement {
     identifier: String,
     #[serde(rename = "displayName")]
     display_name: String,
+    authority: Authority,
 }
 
 #[derive(Debug, Deserialize)]
@@ -32,6 +34,7 @@ struct Achievement {
     description: String,
     image: String,
     secret: bool,
+    authority: Authority,
     #[serde(rename = "statId", skip_serializing_if = "Option::is_none")]
     stat_id: Option<String>,
     #[serde(rename = "statThreshold", skip_serializing_if = "Option::is_none")]
@@ -67,12 +70,7 @@ async fn upload_achievement_image(
         .extension()
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Image file has no extension: {}",
-                image_path.display()
-            )
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("Image file has no extension: {}", image_path.display()))?;
 
     let bytes = std::fs::read(image_path)
         .with_context(|| format!("Failed to read image file: {}", image_path.display()))?;
@@ -117,6 +115,7 @@ pub struct CreateAchievementArgs<'a> {
     pub title: &'a str,
     pub description: &'a str,
     pub secret: bool,
+    pub authority: Option<Authority>,
     pub triggered_by_stat_id: Option<&'a str>,
     pub stat_threshold: Option<f64>,
     pub image_path: Option<&'a Path>,
@@ -158,6 +157,7 @@ pub async fn handle_achievement_list(game_id: &str, json: bool) -> Result<()> {
             Cell::new("Title"),
             Cell::new("Description"),
             Cell::new("Secret"),
+            Cell::new("Authority"),
             Cell::new("Stat ID"),
             Cell::new("Threshold"),
         ]);
@@ -169,6 +169,7 @@ pub async fn handle_achievement_list(game_id: &str, json: bool) -> Result<()> {
             achievement.display_name,
             achievement.description,
             (if achievement.secret { "yes" } else { "no" }).to_string(),
+            achievement.authority.to_string(),
             achievement.stat_id.unwrap_or_else(|| "-".to_string()),
             achievement
                 .stat_threshold
@@ -207,6 +208,10 @@ pub async fn handle_achievement_create(args: CreateAchievementArgs<'_>) -> Resul
         body["image"] = json!(r2_key);
     }
 
+    if let Some(authority) = args.authority {
+        body["authority"] = json!(authority);
+    }
+
     if let Some(stat_id) = args.triggered_by_stat_id {
         let threshold = args.stat_threshold.ok_or_else(|| {
             anyhow::anyhow!("--threshold is required when --triggered-by-stat-id is set")
@@ -225,8 +230,8 @@ pub async fn handle_achievement_create(args: CreateAchievementArgs<'_>) -> Resul
     let resp = config::check_api_response(resp).await?;
     let achievement = resp.json::<CreatedAchievementResponse>().await?.achievement;
     println!(
-        "✓ Created achievement \"{}\" (id: {}, identifier: {})",
-        achievement.display_name, achievement.id, achievement.identifier
+        "✓ Created achievement \"{}\" (id: {}, identifier: {}, authority: {})",
+        achievement.display_name, achievement.id, achievement.identifier, achievement.authority
     );
     Ok(())
 }
@@ -352,6 +357,7 @@ mod tests {
                 "description": "Win a match",
                 "image": "achievements/first-win.png",
                 "secret": false,
+                "authority": "Server",
                 "statId": "wins-stat-id",
                 "statThreshold": 1
             }]
@@ -362,6 +368,7 @@ mod tests {
         assert_eq!(achievement.id, "achievement-id");
         assert_eq!(achievement.identifier, "FIRST_WIN");
         assert_eq!(achievement.display_name, "First Win");
+        assert_eq!(achievement.authority, Authority::Server);
         assert_eq!(achievement.stat_id.as_deref(), Some("wins-stat-id"));
         assert_eq!(achievement.stat_threshold, Some(1.0));
     }
@@ -375,7 +382,8 @@ mod tests {
                 "displayName": "Welcome",
                 "description": "Start the game",
                 "image": "",
-                "secret": true
+                "secret": true,
+                "authority": "Client"
             }]
         }))
         .expect("an achievement with no stat link should deserialize");
@@ -417,6 +425,7 @@ mod tests {
             description: "Start the game".to_string(),
             image: "achievements/welcome.png".to_string(),
             secret: false,
+            authority: Authority::Client,
             stat_id: None,
             stat_threshold: None,
         };
@@ -424,6 +433,7 @@ mod tests {
         let value = serde_json::to_value(achievement).expect("achievement should serialize");
         assert_eq!(value["displayName"], "Welcome");
         assert_eq!(value["image"], "achievements/welcome.png");
+        assert_eq!(value["authority"], "Client");
         assert!(value.get("display_name").is_none());
         assert!(value.get("statId").is_none());
         assert!(value.get("statThreshold").is_none());

@@ -1,4 +1,5 @@
 use crate::auth::require_api_key;
+use crate::authority::Authority;
 use crate::config;
 use anyhow::Result;
 use serde::Deserialize;
@@ -10,6 +11,7 @@ struct Stat {
     identifier: String,
     #[serde(rename = "displayName")]
     display_name: String,
+    authority: Authority,
 }
 
 #[derive(Debug, Deserialize)]
@@ -17,27 +19,37 @@ struct StatResponse {
     stat: Stat,
 }
 
-pub async fn handle_stat_create(game_id: &str, identifier: &str, name: &str) -> Result<()> {
+pub async fn handle_stat_create(
+    game_id: &str,
+    identifier: &str,
+    name: &str,
+    authority: Option<Authority>,
+) -> Result<()> {
     let api_key = require_api_key()?;
     let client = config::create_http_client()?;
     let api_host = config::get("api_host")?;
     let url = format!("{}/api/games/{}/stats", api_host, game_id);
 
+    let mut body = json!({
+        "identifier": identifier,
+        "displayName": name,
+    });
+    if let Some(authority) = authority {
+        body["authority"] = json!(authority);
+    }
+
     let resp = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", api_key))
-        .json(&json!({
-            "identifier": identifier,
-            "displayName": name,
-        }))
+        .json(&body)
         .send()
         .await?;
 
     let resp = config::check_api_response(resp).await?;
     let stat = resp.json::<StatResponse>().await?.stat;
     println!(
-        "✓ Created stat \"{}\" (id: {}, identifier: {})",
-        stat.display_name, stat.id, stat.identifier
+        "✓ Created stat \"{}\" (id: {}, identifier: {}, authority: {})",
+        stat.display_name, stat.id, stat.identifier, stat.authority
     );
     Ok(())
 }
