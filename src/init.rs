@@ -105,29 +105,6 @@ fn detect_godot(dir: &Path) -> Option<DetectedEngine> {
     })
 }
 
-/// True for a full Unity 6 editor version such as `6000.0.73f1` — the only
-/// form the Wavedash backend accepts (`^6000\.\d+\.\d+[fp]\d+$`).
-fn is_unity6_version(version: &str) -> bool {
-    let Some(rest) = version.strip_prefix("6000.") else {
-        return false;
-    };
-    let mut parts = rest.splitn(2, '.');
-    let (Some(minor), Some(patch)) = (parts.next(), parts.next()) else {
-        return false;
-    };
-    if minor.is_empty() || !minor.bytes().all(|b| b.is_ascii_digit()) {
-        return false;
-    }
-    let Some(split) = patch.find(['f', 'p']) else {
-        return false;
-    };
-    let (num, suffix) = (&patch[..split], &patch[split + 1..]);
-    !num.is_empty()
-        && num.bytes().all(|b| b.is_ascii_digit())
-        && !suffix.is_empty()
-        && suffix.bytes().all(|b| b.is_ascii_digit())
-}
-
 /// Look for Unity project markers and parse ProjectVersion.txt.
 /// Unity stores the exact editor version (e.g., "2022.3.12f1").
 fn detect_unity(dir: &Path) -> Option<DetectedEngine> {
@@ -316,25 +293,14 @@ pub async fn handle_init() -> Result<()> {
         EngineType::Unity => {
             if let Some(ref hint) = detected.version_hint {
                 cliclack::log::info(format!("Detected Unity version: {}", hint))?;
-                if !is_unity6_version(hint) {
-                    cliclack::log::warning(
-                        "Wavedash supports Unity 6 (6000.x) builds only; upgrade the project before pushing.",
-                    )?;
-                }
                 Some(hint.clone())
             } else {
-                let version: String = cliclack::input("Unity version (Unity 6, e.g. 6000.0.73f1)")
+                // The backend only accepts full Unity 6 versions; it validates on push.
+                let version: String = cliclack::input("Unity version")
                     .placeholder("6000.0.73f1")
                     .default_input("6000.0.73f1")
-                    .validate(|input: &String| {
-                        if is_unity6_version(input.trim()) {
-                            Ok(())
-                        } else {
-                            Err("Enter a full Unity 6 version like 6000.0.73f1")
-                        }
-                    })
                     .interact()?;
-                Some(version.trim().to_string())
+                Some(version)
             }
         }
         EngineType::Custom => None,
@@ -558,32 +524,4 @@ pub async fn handle_project_list(team_id: &str, json: bool) -> Result<()> {
     }
     println!("{table}");
     Ok(())
-}
-
-#[cfg(test)]
-mod unity_version_tests {
-    use super::is_unity6_version;
-
-    #[test]
-    fn accepts_full_unity6_versions() {
-        assert!(is_unity6_version("6000.0.73f1"));
-        assert!(is_unity6_version("6000.3.9f1"));
-        assert!(is_unity6_version("6000.0.2p3"));
-    }
-
-    #[test]
-    fn rejects_other_versions() {
-        for v in [
-            "2022.3",
-            "2022.3.12f1",
-            "6000.0",
-            "6000.0.73",
-            "6000.0.73f",
-            "6000..1f1",
-            "6000.0.x1f1",
-            "",
-        ] {
-            assert!(!is_unity6_version(v), "{v} should be rejected");
-        }
-    }
 }
