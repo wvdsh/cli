@@ -325,6 +325,7 @@ pub async fn handle_init() -> Result<()> {
             } else {
                 let version: String = cliclack::input("Unity version (Unity 6, e.g. 6000.0.73f1)")
                     .placeholder("6000.0.73f1")
+                    .default_input("6000.0.73f1")
                     .validate(|input: &String| {
                         if is_unity6_version(input.trim()) {
                             Ok(())
