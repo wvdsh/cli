@@ -230,7 +230,7 @@ fn generate_toml(
             toml.push_str(&format!("\n[godot]\nversion = \"{}\"\n", version));
         }
         EngineType::Unity => {
-            let version = engine_version.unwrap_or("2022.3");
+            let version = engine_version.unwrap_or("6000.0.73f1");
             toml.push_str(&format!("\n[unity]\nversion = \"{}\"\n", version));
         }
         EngineType::Custom => {
@@ -295,9 +295,10 @@ pub async fn handle_init() -> Result<()> {
                 cliclack::log::info(format!("Detected Unity version: {}", hint))?;
                 Some(hint.clone())
             } else {
+                // The backend only accepts full Unity 6 versions; it validates on push.
                 let version: String = cliclack::input("Unity version")
-                    .placeholder("2022.3")
-                    .default_input("2022.3")
+                    .placeholder("6000.0.73f1")
+                    .default_input("6000.0.73f1")
                     .interact()?;
                 Some(version)
             }
