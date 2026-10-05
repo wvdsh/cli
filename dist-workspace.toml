@@ -5,6 +5,9 @@ members = ["cargo:."]
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.30.2"
+# release.yml verifies and embeds archive hashes after the global build.
+# Preserve this step when regenerating CI; see docs/windows-installer.md.
+allow-dirty = ["ci"]
 # Custom build setup steps
 github-build-setup = "../build-setup.yml"
 # CI backends to support
