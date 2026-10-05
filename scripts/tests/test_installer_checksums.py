@@ -50,6 +50,12 @@ class InstallerChecksums(unittest.TestCase):
         scratch = self.root / "scratch"
         scratch.mkdir(exist_ok=True)
         env = os.environ.copy()
+        # CI runs Python from pwsh. Passing its module path through Python to
+        # Windows PowerShell 5.1 loads incompatible PowerShell 7 modules.
+        # Let the child shell construct its own default module search path.
+        for key in list(env):
+            if key.upper() == "PSMODULEPATH":
+                del env[key]
         for key in ("WAVEDASH_DOWNLOAD_URL", "INSTALLER_DOWNLOAD_URL", "HTTPS_PROXY",
                     "ALL_PROXY", "WAVEDASH_GITHUB_TOKEN", "WAVEDASH_INSTALLER_GHE_BASE_URL",
                     "WAVEDASH_INSTALLER_GITHUB_BASE_URL"):
