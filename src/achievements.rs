@@ -40,11 +40,26 @@ struct AchievementsResponse {
 
 #[derive(Debug, Deserialize)]
 struct ImageMediaUploadResponse {
-    #[serde(rename = "transformUrl")]
-    transform_url: String,
-    token: String,
+    #[serde(rename = "assemblyOptions")]
+    assembly_options: AssemblyOptions,
+    #[serde(rename = "maxBytes")]
+    max_bytes: u64,
     #[serde(rename = "r2Key")]
     r2_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AssemblyOptions {
+    params: String,
+    signature: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AssemblyStatus {
+    ok: Option<String>,
+    error: Option<String>,
+    message: Option<String>,
+    assembly_ssl_url: Option<String>,
 }
 
 async fn upload_achievement_image(
@@ -57,12 +72,7 @@ async fn upload_achievement_image(
         .extension()
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Image file has no extension: {}",
-                image_path.display()
-            )
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("Image file has no extension: {}", image_path.display()))?;
 
     let bytes = std::fs::read(image_path)
         .with_context(|| format!("Failed to read image file: {}", image_path.display()))?;
@@ -86,16 +96,78 @@ async fn upload_achievement_image(
     let resp = config::check_api_response(resp).await?;
     let authorization: ImageMediaUploadResponse = resp.json().await?;
 
-    let transform_resp = client
-        .post(&authorization.transform_url)
-        .header("Authorization", format!("Bearer {}", authorization.token))
-        .body(bytes)
+    if bytes.is_empty() || bytes.len() as u64 > authorization.max_bytes {
+        anyhow::bail!(
+            "Image must be between 1 and {} bytes",
+            authorization.max_bytes
+        );
+    }
+    let form = reqwest::multipart::Form::new()
+        .text("params", authorization.assembly_options.params)
+        .text("signature", authorization.assembly_options.signature)
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(bytes).file_name(
+                image_path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        );
+    let media_client = reqwest::Client::new();
+    let mut response = media_client
+        .post("https://api2.transloadit.com/assemblies")
+        .multipart(form)
+        .timeout(std::time::Duration::from_secs(900))
         .send()
         .await?;
-    if !transform_resp.status().is_success() {
-        let status = transform_resp.status();
-        let body = transform_resp.text().await.unwrap_or_default();
-        anyhow::bail!("Image transform failed ({}): {}", status, body);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(900);
+    let mut status_url: Option<String> = None;
+    loop {
+        let http_status = response.status();
+        let status: AssemblyStatus = response
+            .json()
+            .await
+            .context("Invalid Transloadit response")?;
+        if !http_status.is_success() || status.error.is_some() {
+            anyhow::bail!(
+                "Image processing failed: {}",
+                status
+                    .message
+                    .or(status.error)
+                    .unwrap_or_else(|| http_status.to_string())
+            );
+        }
+        match status.ok.as_deref() {
+            Some("ASSEMBLY_COMPLETED") => break,
+            Some("ASSEMBLY_UPLOADING" | "ASSEMBLY_EXECUTING") => {}
+            _ => anyhow::bail!("Unexpected image processing status: {:?}", status.ok),
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("Image processing timed out");
+        }
+        if status_url.is_none() {
+            status_url = status.assembly_ssl_url;
+        }
+        let url = reqwest::Url::parse(
+            status_url
+                .as_deref()
+                .context("Missing Assembly status URL")?,
+        )?;
+        if url.scheme() != "https"
+            || !url
+                .host_str()
+                .is_some_and(|host| host.ends_with(".transloadit.com"))
+        {
+            anyhow::bail!("Invalid Transloadit Assembly status URL");
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        response = media_client
+            .get(url)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await?;
     }
 
     Ok(authorization.r2_key)
@@ -379,17 +451,14 @@ mod tests {
     #[test]
     fn parses_an_image_media_upload_authorization() {
         let response: ImageMediaUploadResponse = serde_json::from_value(json!({
-            "transformUrl": "https://media.wavedash.com/transform",
-            "token": "signed-token",
+            "assemblyOptions": {"params": "{}", "signature": "sha384:signed"},
+            "maxBytes": 25000000,
             "r2Key": "org/game/achievements/first-win.webp"
         }))
         .expect("the media upload authorization should deserialize");
 
-        assert_eq!(
-            response.transform_url,
-            "https://media.wavedash.com/transform"
-        );
-        assert_eq!(response.token, "signed-token");
+        assert_eq!(response.assembly_options.signature, "sha384:signed");
+        assert_eq!(response.max_bytes, 25_000_000);
         assert_eq!(response.r2_key, "org/game/achievements/first-win.webp");
     }
 
