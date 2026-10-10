@@ -23,6 +23,8 @@ struct ReleaseNotes {
 
 #[derive(Debug, Serialize)]
 struct PublishRequest {
+    #[serde(rename = "notifyPlayers")]
+    notify_players: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     notes: Option<ReleaseNotes>,
 }
@@ -44,6 +46,7 @@ pub struct PublishArgs {
     pub removed: Vec<String>,
     pub fixed: Vec<String>,
     pub adjusted: Vec<String>,
+    pub notify_players: bool,
     pub yes: bool,
 }
 
@@ -107,8 +110,20 @@ pub async fn handle_publish(args: PublishArgs) -> Result<()> {
         removed,
         fixed,
         adjusted,
+        notify_players,
         yes,
     } = args;
+
+    let notes = build_release_notes(title, summary, added, removed, fixed, adjusted);
+    if notify_players
+        && !notes
+            .as_ref()
+            .is_some_and(|notes| notes.summary.is_some() || notes.changes.is_some())
+    {
+        anyhow::bail!(
+            "Add --summary or at least one patch note (--added, --removed, --fixed, or --adjusted) to notify players."
+        );
+    }
 
     let wavedash_config = WavedashConfig::load(&config_path)?;
     let game_id = wavedash_config.game_id()?;
@@ -132,6 +147,9 @@ pub async fn handle_publish(args: PublishArgs) -> Result<()> {
             build_id.bold(),
             game_id.bold()
         );
+        if notify_players {
+            println!("Players will be notified of this update.");
+        }
         let confirmed = cliclack::confirm("Are you sure you want to continue?")
             .initial_value(false)
             .interact()?;
@@ -148,13 +166,14 @@ pub async fn handle_publish(args: PublishArgs) -> Result<()> {
         api_host, game_id, build_id
     );
 
-    let notes = build_release_notes(title, summary, added, removed, fixed, adjusted);
-
     let response = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
-        .json(&PublishRequest { notes })
+        .json(&PublishRequest {
+            notes,
+            notify_players,
+        })
         .send()
         .await?;
 
@@ -167,4 +186,70 @@ pub async fn handle_publish(args: PublishArgs) -> Result<()> {
     println!("View at: {}/games/{}", site_host, result.game_slug);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publish_request_sends_notification_flag_and_trimmed_notes() {
+        let request = PublishRequest {
+            notify_players: true,
+            notes: build_release_notes(
+                None,
+                Some("  New levels  ".into()),
+                vec![],
+                vec![],
+                vec!["  Fixed a crash  ".into()],
+                vec![],
+            ),
+        };
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({
+                "notifyPlayers": true,
+                "notes": {
+                    "summary": "New levels",
+                    "changes": [{ "kind": "fixed", "text": "Fixed a crash" }]
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn notify_players_rejects_title_only_or_blank_notes_before_loading_config() {
+        for summary in [None, Some(" \n\t ".into())] {
+            let error = handle_publish(PublishArgs {
+                config_path: PathBuf::from("missing-config.toml"),
+                build_id: "build-id".into(),
+                title: Some("A title".into()),
+                summary,
+                added: vec!["   ".into()],
+                removed: vec![],
+                fixed: vec![],
+                adjusted: vec![],
+                notify_players: true,
+                yes: true,
+            })
+            .await
+            .unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("Add --summary or at least one patch note"));
+        }
+    }
+
+    #[tokio::test]
+    async fn publish_cooldown_error_preserves_server_message() {
+        let message = "Players can only be notified once every 24 hours for this game. Publish without notifying, or try again later.";
+        let response = axum::http::Response::builder()
+            .status(400)
+            .body(serde_json::json!({ "error": message, "code": "invalid_operation" }).to_string())
+            .unwrap();
+        let error = config::check_api_response(response.into())
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), message);
+    }
 }
