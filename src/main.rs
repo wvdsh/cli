@@ -201,6 +201,11 @@ enum Commands {
         #[arg(long, help = "Adjusted change item", action = clap::ArgAction::Append, num_args = 1)]
         adjusted: Vec<String>,
         #[arg(
+            long,
+            help = "Notify players of the update (requires a summary or patch note; once per 24 hours per game)"
+        )]
+        notify_players: bool,
+        #[arg(
             long = "yes",
             short = 'y',
             visible_alias = "force",
@@ -722,6 +727,7 @@ async fn run() -> Result<()> {
             removed,
             fixed,
             adjusted,
+            notify_players,
             yes,
         } => {
             handle_publish(PublishArgs {
@@ -733,6 +739,7 @@ async fn run() -> Result<()> {
                 removed,
                 fixed,
                 adjusted,
+                notify_players,
                 yes,
             })
             .await?;
@@ -905,6 +912,23 @@ async fn run() -> Result<()> {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn publish_notifications_are_opt_in() {
+        for notify in [false, true] {
+            let mut argv = vec!["wavedash", "publish", "build-id", "--summary", "New levels"];
+            if notify {
+                argv.push("--notify-players");
+            }
+            let cli = Cli::try_parse_from(argv).expect("publish should parse");
+            match cli.command {
+                Some(Commands::Publish { notify_players, .. }) => {
+                    assert_eq!(notify_players, notify)
+                }
+                _ => panic!("parsed the wrong command"),
+            }
+        }
+    }
 
     /// A blank one would reach [`resolve_game_id`], which returns a typed flag
     /// verbatim, and land in a request URL as `/api/games//…`.
