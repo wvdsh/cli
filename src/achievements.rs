@@ -1,4 +1,5 @@
 use crate::auth::require_api_key;
+use crate::authority::Authority;
 use crate::config;
 use anyhow::{Context, Result};
 use comfy_table::modifiers::UTF8_ROUND_CORNERS;
@@ -8,29 +9,29 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::Path;
 
-/// The create response, narrowed to the fields printed by the command. This is
-/// deliberately separate from `Achievement`, whose list payload is larger.
-#[derive(Debug, Deserialize)]
-struct CreatedAchievement {
-    _id: String,
-    identifier: String,
-    #[serde(rename = "displayName")]
-    display_name: String,
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 struct Achievement {
-    _id: String,
+    id: String,
     identifier: String,
     #[serde(rename = "displayName")]
     display_name: String,
     description: String,
     image: String,
     secret: bool,
+    authority: Authority,
     #[serde(rename = "statId", skip_serializing_if = "Option::is_none")]
     stat_id: Option<String>,
+    #[serde(rename = "statIdentifier", skip_serializing_if = "Option::is_none")]
+    stat_identifier: Option<String>,
+    #[serde(rename = "statDisplayName", skip_serializing_if = "Option::is_none")]
+    stat_display_name: Option<String>,
     #[serde(rename = "statThreshold", skip_serializing_if = "Option::is_none")]
     stat_threshold: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AchievementResponse {
+    achievement: Achievement,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,6 +41,11 @@ struct AchievementsResponse {
 
 #[derive(Debug, Deserialize)]
 struct ImageMediaUploadResponse {
+    upload: ImageMediaUpload,
+}
+
+#[derive(Debug, Deserialize)]
+struct ImageMediaUpload {
     #[serde(rename = "transformUrl")]
     transform_url: String,
     token: String,
@@ -57,12 +63,7 @@ async fn upload_achievement_image(
         .extension()
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Image file has no extension: {}",
-                image_path.display()
-            )
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("Image file has no extension: {}", image_path.display()))?;
 
     let bytes = std::fs::read(image_path)
         .with_context(|| format!("Failed to read image file: {}", image_path.display()))?;
@@ -84,7 +85,7 @@ async fn upload_achievement_image(
         .send()
         .await?;
     let resp = config::check_api_response(resp).await?;
-    let authorization: ImageMediaUploadResponse = resp.json().await?;
+    let authorization = resp.json::<ImageMediaUploadResponse>().await?.upload;
 
     let transform_resp = client
         .post(&authorization.transform_url)
@@ -107,6 +108,7 @@ pub struct CreateAchievementArgs<'a> {
     pub title: &'a str,
     pub description: &'a str,
     pub secret: bool,
+    pub authority: Option<Authority>,
     pub triggered_by_stat_id: Option<&'a str>,
     pub stat_threshold: Option<f64>,
     pub image_path: Option<&'a Path>,
@@ -148,18 +150,23 @@ pub async fn handle_achievement_list(game_id: &str, json: bool) -> Result<()> {
             Cell::new("Title"),
             Cell::new("Description"),
             Cell::new("Secret"),
-            Cell::new("Stat ID"),
+            Cell::new("Authority"),
+            Cell::new("Stat"),
             Cell::new("Threshold"),
         ]);
 
     for achievement in data.achievements {
         table.add_row(vec![
-            achievement._id,
+            achievement.id,
             achievement.identifier,
             achievement.display_name,
             achievement.description,
             (if achievement.secret { "yes" } else { "no" }).to_string(),
-            achievement.stat_id.unwrap_or_else(|| "-".to_string()),
+            achievement.authority.to_string(),
+            achievement
+                .stat_identifier
+                .or(achievement.stat_id)
+                .unwrap_or_else(|| "-".to_string()),
             achievement
                 .stat_threshold
                 .map(|threshold| threshold.to_string())
@@ -197,6 +204,10 @@ pub async fn handle_achievement_create(args: CreateAchievementArgs<'_>) -> Resul
         body["image"] = json!(r2_key);
     }
 
+    if let Some(authority) = args.authority {
+        body["authority"] = json!(authority);
+    }
+
     if let Some(stat_id) = args.triggered_by_stat_id {
         let threshold = args.stat_threshold.ok_or_else(|| {
             anyhow::anyhow!("--threshold is required when --triggered-by-stat-id is set")
@@ -213,10 +224,10 @@ pub async fn handle_achievement_create(args: CreateAchievementArgs<'_>) -> Resul
         .await?;
 
     let resp = config::check_api_response(resp).await?;
-    let achievement: CreatedAchievement = resp.json().await?;
+    let achievement = resp.json::<AchievementResponse>().await?.achievement;
     println!(
         "✓ Created achievement \"{}\" (id: {}, identifier: {})",
-        achievement.display_name, achievement._id, achievement.identifier
+        achievement.display_name, achievement.id, achievement.identifier
     );
     Ok(())
 }
@@ -228,6 +239,7 @@ pub struct UpdateAchievementArgs<'a> {
     pub identifier: Option<&'a str>,
     pub description: Option<&'a str>,
     pub secret: Option<bool>,
+    pub authority: Option<Authority>,
     /// `Some(Some(id))` sets the stat link, `Some(None)` clears it,
     /// `None` leaves it alone.
     pub triggered_by_stat_id: Option<Option<&'a str>>,
@@ -266,6 +278,9 @@ pub async fn handle_achievement_update(args: UpdateAchievementArgs<'_>) -> Resul
     }
     if let Some(secret) = args.secret {
         body.insert("secret".into(), json!(secret));
+    }
+    if let Some(authority) = args.authority {
+        body.insert("authority".into(), json!(authority));
     }
     if let Some(r2_key) = image_r2_key {
         body.insert("image".into(), json!(r2_key));
@@ -336,36 +351,62 @@ mod tests {
     fn parses_the_achievement_list_response() {
         let response: AchievementsResponse = serde_json::from_value(json!({
             "achievements": [{
-                "_id": "achievement-id",
+                "id": "achievement-id",
                 "identifier": "FIRST_WIN",
                 "displayName": "First Win",
                 "description": "Win a match",
                 "image": "achievements/first-win.png",
                 "secret": false,
+                "authority": "Server",
                 "statId": "wins-stat-id",
+                "statIdentifier": "WINS",
+                "statDisplayName": "Wins",
                 "statThreshold": 1
             }]
         }))
         .expect("the API response should deserialize");
 
         let achievement = &response.achievements[0];
-        assert_eq!(achievement._id, "achievement-id");
+        assert_eq!(achievement.id, "achievement-id");
         assert_eq!(achievement.identifier, "FIRST_WIN");
         assert_eq!(achievement.display_name, "First Win");
+        assert_eq!(achievement.authority, Authority::Server);
         assert_eq!(achievement.stat_id.as_deref(), Some("wins-stat-id"));
+        assert_eq!(achievement.stat_identifier.as_deref(), Some("WINS"));
+        assert_eq!(achievement.stat_display_name.as_deref(), Some("Wins"));
         assert_eq!(achievement.stat_threshold, Some(1.0));
+    }
+
+    #[test]
+    fn parses_the_achievement_create_response() {
+        let response: AchievementResponse = serde_json::from_value(json!({
+            "achievement": {
+                "id": "achievement-id",
+                "identifier": "FIRST_WIN",
+                "displayName": "First Win",
+                "description": "Win a match",
+                "image": "",
+                "secret": false,
+                "authority": "Client"
+            }
+        }))
+        .expect("the create response should deserialize");
+
+        assert_eq!(response.achievement.id, "achievement-id");
+        assert_eq!(response.achievement.identifier, "FIRST_WIN");
     }
 
     #[test]
     fn parses_an_achievement_without_a_stat_link() {
         let response: AchievementsResponse = serde_json::from_value(json!({
             "achievements": [{
-                "_id": "achievement-id",
+                "id": "achievement-id",
                 "identifier": "WELCOME",
                 "displayName": "Welcome",
                 "description": "Start the game",
                 "image": "",
-                "secret": true
+                "secret": true,
+                "authority": "Client"
             }]
         }))
         .expect("an achievement with no stat link should deserialize");
@@ -373,44 +414,56 @@ mod tests {
         let achievement = &response.achievements[0];
         assert!(achievement.secret);
         assert_eq!(achievement.stat_id, None);
+        assert_eq!(achievement.stat_identifier, None);
         assert_eq!(achievement.stat_threshold, None);
     }
 
     #[test]
     fn parses_an_image_media_upload_authorization() {
         let response: ImageMediaUploadResponse = serde_json::from_value(json!({
-            "transformUrl": "https://media.wavedash.com/transform",
-            "token": "signed-token",
-            "r2Key": "org/game/achievements/first-win.webp"
+            "upload": {
+                "transformUrl": "https://media.wavedash.com/transform",
+                "token": "signed-token",
+                "r2Key": "org/game/achievements/first-win.webp"
+            }
         }))
         .expect("the media upload authorization should deserialize");
 
         assert_eq!(
-            response.transform_url,
+            response.upload.transform_url,
             "https://media.wavedash.com/transform"
         );
-        assert_eq!(response.token, "signed-token");
-        assert_eq!(response.r2_key, "org/game/achievements/first-win.webp");
+        assert_eq!(response.upload.token, "signed-token");
+        assert_eq!(
+            response.upload.r2_key,
+            "org/game/achievements/first-win.webp"
+        );
     }
 
     #[test]
     fn json_output_uses_api_field_names_and_omits_empty_stat_fields() {
         let achievement = Achievement {
-            _id: "achievement-id".to_string(),
+            id: "achievement-id".to_string(),
             identifier: "WELCOME".to_string(),
             display_name: "Welcome".to_string(),
             description: "Start the game".to_string(),
             image: "achievements/welcome.png".to_string(),
             secret: false,
+            authority: Authority::Client,
             stat_id: None,
+            stat_identifier: None,
+            stat_display_name: None,
             stat_threshold: None,
         };
 
         let value = serde_json::to_value(achievement).expect("achievement should serialize");
         assert_eq!(value["displayName"], "Welcome");
         assert_eq!(value["image"], "achievements/welcome.png");
+        assert_eq!(value["authority"], "Client");
         assert!(value.get("display_name").is_none());
         assert!(value.get("statId").is_none());
+        assert!(value.get("statIdentifier").is_none());
+        assert!(value.get("statDisplayName").is_none());
         assert!(value.get("statThreshold").is_none());
     }
 }
