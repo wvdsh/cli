@@ -90,7 +90,6 @@ async fn upload_achievement_image(
         .json(&json!({
             "identifier": identifier,
             "fileExtension": extension,
-            "provider": "transloadit",
         }))
         .send()
         .await?;
