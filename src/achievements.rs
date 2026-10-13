@@ -97,7 +97,7 @@ async fn upload_achievement_image(
     let file = std::fs::File::open(image_path)
         .with_context(|| format!("Failed to open image file: {}", image_path.display()))?;
     let file_size = file.metadata()?.len();
-    if file_size == 0 || file_size > authorization.max_bytes {
+    if file_size > authorization.max_bytes {
         anyhow::bail!(
             "Image must be between 1 and {} bytes",
             authorization.max_bytes
