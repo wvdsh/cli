@@ -6,6 +6,7 @@ use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, ContentArrangement, Table};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::io::Read;
 use std::path::Path;
 
 /// The create response, narrowed to the fields printed by the command. This is
@@ -74,9 +75,6 @@ async fn upload_achievement_image(
         .map(|s| s.to_ascii_lowercase())
         .ok_or_else(|| anyhow::anyhow!("Image file has no extension: {}", image_path.display()))?;
 
-    let bytes = std::fs::read(image_path)
-        .with_context(|| format!("Failed to read image file: {}", image_path.display()))?;
-
     let client = config::create_http_client()?;
     let api_host = config::get("api_host")?;
 
@@ -96,6 +94,19 @@ async fn upload_achievement_image(
     let resp = config::check_api_response(resp).await?;
     let authorization: ImageMediaUploadResponse = resp.json().await?;
 
+    let file = std::fs::File::open(image_path)
+        .with_context(|| format!("Failed to open image file: {}", image_path.display()))?;
+    let file_size = file.metadata()?.len();
+    if file_size == 0 || file_size > authorization.max_bytes {
+        anyhow::bail!(
+            "Image must be between 1 and {} bytes",
+            authorization.max_bytes
+        );
+    }
+    let mut bytes = Vec::new();
+    file.take(authorization.max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("Failed to read image file: {}", image_path.display()))?;
     if bytes.is_empty() || bytes.len() as u64 > authorization.max_bytes {
         anyhow::bail!(
             "Image must be between 1 and {} bytes",
