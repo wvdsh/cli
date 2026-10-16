@@ -4,3 +4,4 @@ test_build
 .env
 .claude/settings.local.json
 *.DS_Store
+__pycache__/
