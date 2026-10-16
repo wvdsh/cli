@@ -19,6 +19,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  windows-signing-checks:
+    name: Windows signing release checks
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s scripts/tests -p "test_*.py"
+      - shell: pwsh
+        run: ./scripts/tests/test-windows-signatures.ps1
+
   test:
     name: test and lint
     runs-on: ubuntu-latest
