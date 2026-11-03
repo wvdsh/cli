@@ -22,20 +22,9 @@ fn main() {
     };
     println!("cargo:rustc-env=CONFIG_DIR={}", config_dir);
 
-    // Optional Cloudflare Access credentials (only needed for staging)
-    let optional = ["CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"];
-
-    for var in optional {
-        if let Ok(value) = std::env::var(var) {
-            println!("cargo:rustc-env={}={}", var, value);
-        }
-    }
-
     println!("cargo:rerun-if-changed=.env");
     println!("cargo:rerun-if-env-changed=SITE_HOST");
     println!("cargo:rerun-if-env-changed=CONVEX_HTTP_URL");
     println!("cargo:rerun-if-env-changed=PLAYSITE_HOST");
-    println!("cargo:rerun-if-env-changed=CF_ACCESS_CLIENT_ID");
-    println!("cargo:rerun-if-env-changed=CF_ACCESS_CLIENT_SECRET");
 }
 

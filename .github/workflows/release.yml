@@ -130,7 +130,8 @@ jobs:
       - name: "Install Doppler CLI"
         uses: "dopplerhq/cli-action@v4"
       - name: "Generate .env from Doppler secrets"
-        run: "doppler secrets download --no-file --format env > .env"
+        run: "doppler secrets download --no-file --format env | grep -E '^(SITE_HOST|CONVEX_HTTP_URL|PLAYSITE_HOST)=' > .env"
+        shell: "bash"
         env:
           "DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN }}"
       - name: Install dist
