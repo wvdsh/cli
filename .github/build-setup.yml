@@ -3,7 +3,7 @@
 - name: Generate .env from Doppler secrets
   # Only the keys build.rs compiles into the binary
   shell: bash
-  run: doppler secrets download --no-file --format env | grep -E '^(SITE_HOST|CONVEX_HTTP_URL|PLAYSITE_HOST)=' > .env
+  run: doppler secrets download --no-file --format env | grep -E '^(SITE_HOST|CONVEX_HTTP_URL|PLAYSITE_HOST|CF_ACCESS_CLIENT_ID|CF_ACCESS_CLIENT_SECRET)=' > .env
   env:
     DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
 
