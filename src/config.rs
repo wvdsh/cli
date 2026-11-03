@@ -54,8 +54,6 @@ struct Config {
     /// — serves the default-entrypoint scripts `wavedash dev` boots engine
     /// builds with. https-prefixed here like site_host.
     playsite_host: String,
-    cf_access_client_id: Option<String>,
-    cf_access_client_secret: Option<String>,
 }
 
 impl Config {
@@ -77,8 +75,6 @@ impl Config {
             open_browser_website_host: site_host,
             api_host: env!("CONVEX_HTTP_URL").to_string(),
             playsite_host,
-            cf_access_client_id: option_env!("CF_ACCESS_CLIENT_ID").map(|s| s.to_string()),
-            cf_access_client_secret: option_env!("CF_ACCESS_CLIENT_SECRET").map(|s| s.to_string()),
         })
     }
 }
@@ -103,37 +99,13 @@ pub fn credentials_path() -> Result<PathBuf> {
 /// "please upgrade" prompts without parsing User-Agent.
 pub const CLI_VERSION_HEADER: &str = "X-Wavedash-CLI-Version";
 
-/// Create an HTTP client configured with the CLI version header (always)
-/// and Cloudflare Access headers (only on staging when creds are baked in).
+/// Create an HTTP client configured with the CLI version header.
 pub fn create_http_client() -> Result<reqwest::Client> {
-    let config = Config::load()?;
-
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         CLI_VERSION_HEADER,
         reqwest::header::HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
     );
-
-    let api_host = &config.api_host;
-    let needs_cf_headers = api_host
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .ends_with("staging.wavedash.gg");
-
-    if needs_cf_headers {
-        if let (Some(client_id), Some(client_secret)) =
-            (&config.cf_access_client_id, &config.cf_access_client_secret)
-        {
-            headers.insert(
-                "CF-Access-Client-Id",
-                reqwest::header::HeaderValue::from_str(client_id)?,
-            );
-            headers.insert(
-                "CF-Access-Client-Secret",
-                reqwest::header::HeaderValue::from_str(client_secret)?,
-            );
-        }
-    }
 
     Ok(reqwest::Client::builder().default_headers(headers).build()?)
 }

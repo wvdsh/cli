@@ -1,7 +1,9 @@
 - name: Install Doppler CLI
   uses: dopplerhq/cli-action@v4
 - name: Generate .env from Doppler secrets
-  run: doppler secrets download --no-file --format env > .env
+  # Only the keys build.rs compiles into the binary
+  shell: bash
+  run: doppler secrets download --no-file --format env | grep -E '^(SITE_HOST|CONVEX_HTTP_URL|PLAYSITE_HOST)=' > .env
   env:
     DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
 
