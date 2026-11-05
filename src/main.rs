@@ -7,6 +7,7 @@ mod config;
 mod dev;
 mod file_staging;
 mod init;
+mod leaderboards;
 mod publish;
 mod stats;
 mod updater;
@@ -26,6 +27,10 @@ use config::{resolve_game_id, UploadSource};
 use dev::handle_dev;
 use init::{
     handle_init, handle_project_create, handle_project_list, handle_team_create, handle_team_list,
+};
+use leaderboards::{
+    handle_leaderboard_create, handle_leaderboard_list, handle_leaderboard_update,
+    CreateLeaderboardArgs, DisplayType, LeaderboardSelector, SortOrder, UpdateLeaderboardArgs,
 };
 use publish::{handle_publish, PublishArgs};
 use stats::{handle_stat_create, handle_stat_delete, handle_stat_update};
@@ -228,6 +233,10 @@ enum Commands {
     Achievement {
         #[command(subcommand)]
         action: AchievementCommands,
+    },
+    Leaderboard {
+        #[command(subcommand)]
+        action: LeaderboardCommands,
     },
     #[command(
         name = "clear-playtest-data",
@@ -567,6 +576,110 @@ enum AchievementCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum LeaderboardCommands {
+    #[command(about = "List leaderboards for a game")]
+    List {
+        #[arg(
+            long = "game-id",
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
+    },
+    #[command(about = "Create a new leaderboard for a game")]
+    Create {
+        #[arg(
+            long = "game-id",
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(
+            long,
+            help = "Leaderboard name your game passes to getOrCreateLeaderboard (e.g. high_scores)"
+        )]
+        name: String,
+        #[arg(
+            long = "display-name",
+            help = "Name players see (e.g. \"High Scores\")"
+        )]
+        display_name: String,
+        #[arg(
+            long = "sort-order",
+            value_enum,
+            default_value_t = SortOrder::Desc,
+            help = "Which scores rank first"
+        )]
+        sort_order: SortOrder,
+        #[arg(
+            long = "display-type",
+            value_enum,
+            default_value_t = DisplayType::Numeric,
+            help = "How scores are displayed"
+        )]
+        display_type: DisplayType,
+        #[arg(long, help = "Hide the leaderboard from the game page")]
+        hidden: bool,
+    },
+    #[command(about = "Update a leaderboard")]
+    #[command(group(
+        clap::ArgGroup::new("leaderboard")
+            .required(true)
+            .args(["id", "name"])
+    ))]
+    Update {
+        #[arg(
+            long = "game-id",
+            value_parser = parse_non_empty_arg,
+            help = "Game ID (defaults to game_id in wavedash.toml. override with WAVEDASH_GAME_ID)"
+        )]
+        game_id: Option<String>,
+        #[arg(
+            short = 'c',
+            long = "config",
+            help = "Path to wavedash.toml config file",
+            default_value = "./wavedash.toml"
+        )]
+        config: PathBuf,
+        #[arg(long, value_parser = parse_non_empty_arg, help = "Leaderboard ID")]
+        id: Option<String>,
+        #[arg(
+            long,
+            value_parser = parse_non_empty_arg,
+            help = "Leaderboard name your game passes to getOrCreateLeaderboard"
+        )]
+        name: Option<String>,
+        #[arg(long = "display-name", help = "New display name")]
+        display_name: Option<String>,
+        #[arg(long = "sort-order", value_enum, help = "Which scores rank first")]
+        sort_order: Option<SortOrder>,
+        #[arg(long = "display-type", value_enum, help = "How scores are displayed")]
+        display_type: Option<DisplayType>,
+        #[arg(
+            long,
+            help = "Hide (true) or show (false) the leaderboard on the game page"
+        )]
+        hidden: Option<bool>,
+    },
+}
+
 fn env_flag_enabled(name: &str) -> bool {
     std::env::var(name)
         .map(|value| {
@@ -870,6 +983,63 @@ async fn run() -> Result<()> {
                 }
             }
         }
+        Commands::Leaderboard { action } => match action {
+            LeaderboardCommands::List {
+                game_id,
+                config,
+                json,
+            } => {
+                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                handle_leaderboard_list(&game_id, json).await?;
+            }
+            LeaderboardCommands::Create {
+                game_id,
+                config,
+                name,
+                display_name,
+                sort_order,
+                display_type,
+                hidden,
+            } => {
+                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                handle_leaderboard_create(CreateLeaderboardArgs {
+                    game_id: &game_id,
+                    name: &name,
+                    display_name: &display_name,
+                    sort_order,
+                    display_type,
+                    hidden,
+                })
+                .await?;
+            }
+            LeaderboardCommands::Update {
+                game_id,
+                config,
+                id,
+                name,
+                display_name,
+                sort_order,
+                display_type,
+                hidden,
+            } => {
+                // clap's required group guarantees exactly one of --id / --name
+                let selector = match (id.as_deref(), name.as_deref()) {
+                    (Some(id), _) => LeaderboardSelector::Id(id),
+                    (None, Some(name)) => LeaderboardSelector::Name(name),
+                    (None, None) => unreachable!(),
+                };
+                let game_id = resolve_game_id(game_id.as_deref(), &config)?;
+                handle_leaderboard_update(UpdateLeaderboardArgs {
+                    game_id: &game_id,
+                    selector,
+                    display_name: display_name.as_deref(),
+                    sort_order,
+                    display_type,
+                    hidden,
+                })
+                .await?;
+            }
+        },
         Commands::ClearPlaytestData {
             game_id,
             config,
@@ -1008,6 +1178,84 @@ mod tests {
             }) => {
                 assert_eq!(game_id.as_deref(), Some("game-id"));
                 assert!(json);
+            }
+            _ => panic!("parsed the wrong command"),
+        }
+    }
+
+    #[test]
+    fn leaderboard_update_takes_exactly_one_of_id_or_name() {
+        let cli = Cli::try_parse_from([
+            "wavedash",
+            "leaderboard",
+            "update",
+            "--name",
+            "daily_scores",
+            "--hidden",
+            "false",
+        ])
+        .expect("update by name should parse");
+        match cli.command {
+            Some(Commands::Leaderboard {
+                action:
+                    LeaderboardCommands::Update {
+                        id, name, hidden, ..
+                    },
+            }) => {
+                assert_eq!(id, None);
+                assert_eq!(name.as_deref(), Some("daily_scores"));
+                assert_eq!(hidden, Some(false));
+            }
+            _ => panic!("parsed the wrong command"),
+        }
+
+        for argv in [
+            vec!["wavedash", "leaderboard", "update", "--hidden", "true"],
+            vec![
+                "wavedash",
+                "leaderboard",
+                "update",
+                "--id",
+                "lb-id",
+                "--name",
+                "daily_scores",
+                "--hidden",
+                "true",
+            ],
+        ] {
+            assert!(
+                Cli::command().try_get_matches_from(&argv).is_err(),
+                "`{}` should be rejected",
+                argv.join(" ")
+            );
+        }
+    }
+
+    #[test]
+    fn leaderboard_create_defaults_to_a_visible_higher_is_better_number() {
+        let cli = Cli::try_parse_from([
+            "wavedash",
+            "leaderboard",
+            "create",
+            "--name",
+            "high_scores",
+            "--display-name",
+            "High Scores",
+        ])
+        .expect("leaderboard create should parse");
+        match cli.command {
+            Some(Commands::Leaderboard {
+                action:
+                    LeaderboardCommands::Create {
+                        sort_order,
+                        display_type,
+                        hidden,
+                        ..
+                    },
+            }) => {
+                assert_eq!(sort_order, SortOrder::Desc);
+                assert_eq!(display_type, DisplayType::Numeric);
+                assert!(!hidden);
             }
             _ => panic!("parsed the wrong command"),
         }
