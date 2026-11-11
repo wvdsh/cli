@@ -25,3 +25,7 @@ publish-jobs = ["homebrew"]
 install-updater = false
 # Custom build command to inject Doppler secrets at compile time
 # build-command = ["doppler", "run", "--", "cargo", "build", "--profile=dist"]
+
+# dist's default macos-14 runner image has been retired by GitHub
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
