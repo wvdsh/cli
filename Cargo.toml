@@ -57,7 +57,7 @@ walkdir = "2.5"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # Authentication
-base64 = "0.22"
+base64 = "0.23"
 ring = "0.17"
 open = "5.0"
 urlencoding = "2.1"
