@@ -6,6 +6,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 # `build.rs` requires these three or it panics, and they normally come from
 # Doppler (or a local .env, which is gitignored). CI only compiles and runs unit
 # tests — nothing here resolves a host or opens a socket — so placeholders keep
