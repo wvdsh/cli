@@ -42,7 +42,7 @@ anyhow = "1.0"
 # Progress & UI
 indicatif = "0.17"
 colored = "3"
-comfy-table = "7"
+comfy-table = "8"
 
 # Cross-platform paths
 directories = "5.0"
