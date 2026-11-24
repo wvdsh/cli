@@ -871,4 +871,47 @@ mod tests {
         assert_eq!(url, LOCAL_SDK_URL);
         assert!(!url.contains("jsdelivr"), "{url:?}");
     }
+
+    /// The RFC 7515 A.2 example public key, published under kid `k1`. Only the
+    /// public half is needed — the test forges a token rather than signing one.
+    const TEST_JWKS: &str = r#"{"keys":[{"kty":"RSA","kid":"k1","alg":"RS256","use":"sig","e":"AQAB","n":"ofgWCuLjybRlzo0tZWJjNiuSfb4p4fAkd_wWJcyQoTbji9k0l8W26mPddxHmfHQp-Vaw-4qPCJrcS2mJPMEzP1Pt0Bm4d4QlL-yRT-SFd2lZS-pCgNMsD1W_YpRPEwOWvG6b32690r2jZ47soMZo9wGzjb_7OMg0LOL-bSf63kpaSHSXndS5z5rexMdbBYUsLA9e-KXBdQOS-UTo7WTBEMa2R2CapHg665xsmtdVMTBQY4uDZlxvb3qCo5ZwKh9kG4LT6_I5IhlJH7aGhyxXFvUK-DWNmoudF8NAco9_h9iaGNj8q2ethFkMLs91kzk2PAcDTW9gb54h4FRWyuXpoQ"}]}"#;
+
+    /// Reaches the signature check itself: the kid resolves and `exp` is far
+    /// off, so only verification stands between this token and "fresh". That
+    /// is also the call that panics when jsonwebtoken is built without a
+    /// crypto backend, which compiles fine — so this is what catches it.
+    #[tokio::test]
+    async fn a_jwt_with_a_known_kid_but_a_bad_signature_is_not_fresh() {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+
+        let cfg = ServeConfig {
+            upload_dir: PathBuf::new(),
+            entry: String::new(),
+            verbose: false,
+            build_uuid: String::new(),
+            sessions_dir: PathBuf::new(),
+            state_token: String::new(),
+            auth_url: String::new(),
+            api_key: String::new(),
+            api_host: String::new(),
+            client: reqwest::Client::new(),
+            engine_entry: None,
+            sdk_js: None,
+            jwks: tokio::sync::OnceCell::new_with(Some(serde_json::from_str(TEST_JWKS).unwrap())),
+        };
+
+        let exp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 24 * 60 * 60;
+        let jwt = format!(
+            "{}.{}.{}",
+            URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256","typ":"JWT","kid":"k1"}"#),
+            URL_SAFE_NO_PAD.encode(format!(r#"{{"exp":{exp}}}"#)),
+            URL_SAFE_NO_PAD.encode([1u8; 256]),
+        );
+
+        assert!(!jwt_fresh(&cfg, &jwt).await);
+    }
 }
