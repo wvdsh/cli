@@ -65,7 +65,9 @@ open = "5.0"
 urlencoding = "2.1"
 
 # Update checking
-self_update = { version = "0.44", features = ["archive-tar", "archive-zip", "compression-flate2", "compression-zip-deflate"] }
+# Defaults are off to keep native-tls, which is what 0.44 used: 1.x defaults to
+# rustls, and its reqwest 0.13 is a separate HTTP stack from the one above.
+self_update = { version = "1.3", default-features = false, features = ["reqwest", "native-tls", "github", "progress-bar", "archive-tar", "archive-zip", "compression-tar-gz", "compression-zip-deflate"] }
 
 [build-dependencies]
 dotenvy = "0.15"
