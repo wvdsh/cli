@@ -8,7 +8,8 @@ use anyhow::{Context, Result};
 use futures::{stream, StreamExt, TryStreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
 use opendal::services::S3;
-use opendal::Operator;
+use opendal::{HttpTransporter, Operator};
+use opendal_http_transport_reqwest::ReqwestTransport;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use walkdir::WalkDir;
@@ -122,7 +123,11 @@ impl R2Uploader {
             builder = builder.session_token(&config.session_token);
         }
 
-        let operator = Operator::new(builder)?.finish();
+        let operator = Operator::new(builder)?;
+        let context = operator
+            .context()
+            .with_http_transport(HttpTransporter::new(ReqwestTransport::default()));
+        let operator = operator.with_context(context);
 
         Ok(Self {
             operator,
