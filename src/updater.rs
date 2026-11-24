@@ -16,8 +16,8 @@ fn repo_name() -> String {
 pub fn check_for_update() -> std::thread::JoinHandle<()> {
     std::thread::spawn(|| {
         let Ok(updater) = self_update::backends::github::Update::configure()
-            .repo_owner(&repo_owner())
-            .repo_name(&repo_name())
+            .repo_owner(repo_owner())
+            .repo_name(repo_name())
             .bin_name(BIN_NAME)
             .current_version(CURRENT_VERSION)
             .build()
@@ -25,22 +25,28 @@ pub fn check_for_update() -> std::thread::JoinHandle<()> {
             return;
         };
 
-        let Ok(latest) = updater.get_latest_release() else {
+        let Ok(releases) = updater.get_latest_release() else {
+            return;
+        };
+        let Some(latest) = releases.latest() else {
             return;
         };
 
-        if self_update::version::bump_is_greater(CURRENT_VERSION, &latest.version).unwrap_or(false)
+        if self_update::version::bump_is_greater(CURRENT_VERSION, latest.version())
+            .unwrap_or(false)
         {
             eprintln!();
             if is_homebrew() {
                 eprintln!(
                     "Update available: {} → {}. Run: brew upgrade wvdsh/tap/wavedash",
-                    CURRENT_VERSION, latest.version
+                    CURRENT_VERSION,
+                    latest.version()
                 );
             } else {
                 eprintln!(
                     "Update available: {} → {}. Run: wavedash update",
-                    CURRENT_VERSION, latest.version
+                    CURRENT_VERSION,
+                    latest.version()
                 );
             }
         }
@@ -62,8 +68,8 @@ pub async fn run_update() -> Result<()> {
         const BIN_PATH_IN_ARCHIVE: &str = "{{ bin }}";
 
         let status = self_update::backends::github::Update::configure()
-            .repo_owner(&repo_owner())
-            .repo_name(&repo_name())
+            .repo_owner(repo_owner())
+            .repo_name(repo_name())
             .bin_name(BIN_NAME)
             .bin_path_in_archive(BIN_PATH_IN_ARCHIVE)
             .current_version(CURRENT_VERSION)
@@ -75,7 +81,7 @@ pub async fn run_update() -> Result<()> {
             .build()?
             .update()?;
 
-        if status.updated() {
+        if status.is_updated() {
             println!("✓ Updated to version {}", status.version());
         } else {
             println!("✓ Already on latest version ({})", status.version());
