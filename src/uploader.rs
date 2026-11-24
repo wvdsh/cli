@@ -122,7 +122,7 @@ impl R2Uploader {
             builder = builder.session_token(&config.session_token);
         }
 
-        let operator = Operator::new(builder)?.finish();
+        let operator = Operator::new(builder)?;
 
         Ok(Self {
             operator,
