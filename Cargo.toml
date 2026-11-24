@@ -50,7 +50,8 @@ comfy-table = "7"
 directories = "5.0"
 
 # Object storage uploads
-opendal = { version = "0.59", default-features = false, features = ["services-s3", "http-transport-reqwest-rustls-no-provider", "auto-register-services", "executors-tokio", "layers-concurrent-limit", "layers-logging", "layers-retry", "layers-timeout"] }
+opendal = { version = "0.59", default-features = false, features = ["services-s3", "auto-register-services", "executors-tokio", "layers-concurrent-limit", "layers-logging", "layers-retry", "layers-timeout"] }
+opendal-http-transport-reqwest = { version = "0.59", default-features = false, features = ["rustls-no-provider"] }
 
 # File operations
 walkdir = "2.5"

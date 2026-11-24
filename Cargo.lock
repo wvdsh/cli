@@ -1982,7 +1982,6 @@ checksum = "46081824c74bac9f68f0bc4408077f77b0e315c006514719c97af1c2227ac2d2"
 dependencies = [
  "ctor",
  "opendal-core",
- "opendal-http-transport-reqwest",
  "opendal-layer-concurrent-limit",
  "opendal-layer-logging",
  "opendal-layer-retry",
@@ -3857,6 +3856,7 @@ dependencies = [
  "mime_guess",
  "open",
  "opendal",
+ "opendal-http-transport-reqwest",
  "reqwest 0.12.24",
  "ring",
  "rustls",
